@@ -1,0 +1,777 @@
+     1→'use client'
+     2→
+     3→import { useRef, useEffect, useMemo } from 'react'
+     4→import { useFrame, useThree } from '@react-three/fiber'
+     5→import { Sky } from '@react-three/drei'
+     6→import * as THREE from 'three'
+     7→
+     8→/* ── Constants ─────────────────────────────────── */
+     9→const MOVE_SPEED = 8
+    10→const TURN_SPEED = 3
+    11→const JUMP_FORCE = 4
+    12→const GRAVITY = -18
+    13→const CAM_HEIGHT = 2.5
+    14→const CAM_DIST = 5.5
+    15→const INTERACT_DIST = 3.5
+    16→const RAFFI_INTERACT_DIST = 5.0
+    17→
+    18→/* ── Positions ─────────────────────────────────── */
+    19→const BAUWAGEN_POS   = new THREE.Vector3(0, 0, 0)
+    20→const RAFFI_INTERACT = new THREE.Vector3(0, 0, 3)    // front of Bauwagen
+    21→const PROF_POS       = new THREE.Vector3(15, 0, -10)
+    22→const CORDULA_POS    = new THREE.Vector3(-12, 0, 12)
+    23→const STEIN_POS      = new THREE.Vector3(8, 0, 22)
+    24→const SHANE_POS      = new THREE.Vector3(-130, 0, 260)
+    25→
+    26→// Baustelle Alpha
+    27→const SITE1_CENTER = new THREE.Vector3(55, 0, 80)
+    28→const KP_A1_POS    = new THREE.Vector3(48, 0, 72)
+    29→const KP_A2_POS    = new THREE.Vector3(62, 0, 86)
+    30→const ARBEITER_POS  = new THREE.Vector3(55, 0, 78)
+    31→
+    32→/* ── Types ─────────────────────────────────────── */
+    33→interface Props {
+    34→  questStep: number
+    35→  kp1aDone: boolean
+    36→  kp1bDone: boolean
+    37→  onKp1a: () => void
+    38→  onKp1b: () => void
+    39→  onRaffiInteract: () => void
+    40→  onProfessorInteract: () => void
+    41→  onCordulaInteract: () => void
+    42→  onNearChange: (obj: string | null) => void
+    43→  cordulaAwake: boolean
+    44→  chaos: boolean
+    45→}
+    46→
+    47→/* ── Key state (module-level) ──────────────────── */
+    48→const keysDown = new Set<string>()
+    49→
+    50→/* ── Main Scene ────────────────────────────────── */
+    51→export default function GameScene({
+    52→  questStep, kp1aDone, kp1bDone,
+    53→  onKp1a, onKp1b, onRaffiInteract, onProfessorInteract, onCordulaInteract,
+    54→  onNearChange, cordulaAwake, chaos,
+    55→}: Props) {
+    56→  const playerGrp = useRef<THREE.Group>(null!)
+    57→  const tailRef   = useRef<THREE.Mesh>(null!)
+    58→  const pos       = useRef(new THREE.Vector3(0, 0, 5)) // start in front of Bauwagen
+    59→  const yaw       = useRef(0)
+    60→  const velY      = useRef(0)
+    61→  const grounded  = useRef(true)
+    62→  const t         = useRef(0)
+    63→  const prevNear  = useRef<string | null>(null)
+    64→  const { camera } = useThree()
+    65→
+    66→  /* ── Keyboard ──────────────────────────────── */
+    67→  useEffect(() => {
+    68→    const down = (e: KeyboardEvent) => {
+    69→      if (cordulaAwake) return
+    70→      keysDown.add(e.code)
+    71→      if (e.code !== 'KeyE') return
+    72→      const p = pos.current
+    73→
+    74→      // Checkpoints (only during quest)
+    75→      if (questStep === 1 && !kp1aDone && p.distanceTo(KP_A1_POS) < INTERACT_DIST) { onKp1a(); return }
+    76→      if (questStep === 1 && !kp1bDone && p.distanceTo(KP_A2_POS) < INTERACT_DIST) { onKp1b(); return }
+    77→
+    78→      // Raffi at Bauwagen (always available)
+    79→      if (p.distanceTo(RAFFI_INTERACT) < RAFFI_INTERACT_DIST) { onRaffiInteract(); return }
+    80→
+    81→      // Professor
+    82→      if (p.distanceTo(PROF_POS) < INTERACT_DIST) { onProfessorInteract(); return }
+    83→
+    84→      // Cordula
+    85→      if (!cordulaAwake && p.distanceTo(CORDULA_POS) < INTERACT_DIST) { onCordulaInteract(); return }
+    86→    }
+    87→    const up = (e: KeyboardEvent) => keysDown.delete(e.code)
+    88→    window.addEventListener('keydown', down)
+    89→    window.addEventListener('keyup', up)
+    90→    return () => {
+    91→      window.removeEventListener('keydown', down)
+    92→      window.removeEventListener('keyup', up)
+    93→    }
+    94→  }, [questStep, kp1aDone, kp1bDone, cordulaAwake,
+    95→      onKp1a, onKp1b, onRaffiInteract, onProfessorInteract, onCordulaInteract])
+    96→
+    97→  /* ── Game Loop ─────────────────────────────── */
+    98→  useFrame((_, raw) => {
+    99→    const dt = Math.min(raw, 0.05)
+   100→    t.current += dt
+   101→
+   102→    if (cordulaAwake) {
+   103→      const offset = new THREE.Vector3(0, CAM_HEIGHT, -CAM_DIST)
+   104→      offset.applyAxisAngle(UP, yaw.current)
+   105→      const targetPos = pos.current.clone().add(offset)
+   106→      camera.position.lerp(targetPos, 1 - Math.pow(0.005, dt))
+   107→      camera.lookAt(pos.current.x, 0.3, pos.current.z)
+   108→      return
+   109→    }
+   110→
+   111→    /* turn */
+   112→    if (keysDown.has('KeyA') || keysDown.has('ArrowLeft'))  yaw.current += TURN_SPEED * dt
+   113→    if (keysDown.has('KeyD') || keysDown.has('ArrowRight')) yaw.current -= TURN_SPEED * dt
+   114→
+   115→    /* move */
+   116→    const fwd = new THREE.Vector3(Math.sin(yaw.current), 0, Math.cos(yaw.current))
+   117→    const moving = keysDown.has('KeyW') || keysDown.has('ArrowUp') ||
+   118→                   keysDown.has('KeyS') || keysDown.has('ArrowDown')
+   119→    if (keysDown.has('KeyW') || keysDown.has('ArrowUp'))   pos.current.addScaledVector(fwd, MOVE_SPEED * dt)
+   120→    if (keysDown.has('KeyS') || keysDown.has('ArrowDown')) pos.current.addScaledVector(fwd, -MOVE_SPEED * 0.5 * dt)
+   121→
+   122→    /* jump */
+   123→    if (keysDown.has('Space') && grounded.current) { velY.current = JUMP_FORCE; grounded.current = false }
+   124→    velY.current += GRAVITY * dt
+   125→    pos.current.y += velY.current * dt
+   126→    if (pos.current.y <= 0) { pos.current.y = 0; velY.current = 0; grounded.current = true }
+   127→
+   128→    /* apply to group */
+   129→    playerGrp.current.position.copy(pos.current)
+   130→    playerGrp.current.rotation.y = yaw.current
+   131→    if (moving && grounded.current) {
+   132→      playerGrp.current.position.y += Math.sin(t.current * 14) * 0.025
+   133→    }
+   134→
+   135→    /* tail wag */
+   136→    if (tailRef.current) {
+   137→      const wagSpeed = moving ? 10 : 3
+   138→      tailRef.current.rotation.y = Math.sin(t.current * wagSpeed) * 0.6
+   139→    }
+   140→
+   141→    /* camera follow + chaos shake */
+   142→    const offset = new THREE.Vector3(0, CAM_HEIGHT, -CAM_DIST)
+   143→    offset.applyAxisAngle(UP, yaw.current)
+   144→    const targetPos = pos.current.clone().add(offset)
+   145→    if (chaos) {
+   146→      targetPos.x += Math.sin(t.current * 37) * 0.15
+   147→      targetPos.y += Math.cos(t.current * 29) * 0.1
+   148→    }
+   149→    camera.position.lerp(targetPos, 1 - Math.pow(0.005, dt))
+   150→    camera.lookAt(pos.current.x, 0.3, pos.current.z)
+   151→
+   152→    /* proximity */
+   153→    const p = pos.current
+   154→    let near: string | null = null
+   155→    if (p.distanceTo(RAFFI_INTERACT) < RAFFI_INTERACT_DIST) near = 'raffi'
+   156→    else if (questStep === 1 && !kp1aDone && p.distanceTo(KP_A1_POS) < INTERACT_DIST) near = 'kp1a'
+   157→    else if (questStep === 1 && !kp1bDone && p.distanceTo(KP_A2_POS) < INTERACT_DIST) near = 'kp1b'
+   158→    else if (p.distanceTo(PROF_POS) < INTERACT_DIST) near = 'professor'
+   159→    else if (!cordulaAwake && p.distanceTo(CORDULA_POS) < INTERACT_DIST) near = 'cordula'
+   160→    if (near !== prevNear.current) { prevNear.current = near; onNearChange(near) }
+   161→  })
+   162→
+   163→  /* ── Render ────────────────────────────────── */
+   164→  return (
+   165→    <>
+   166→      {/* Lighting */}
+   167→      <ambientLight intensity={0.45} color="#FFF8E7" />
+   168→      <directionalLight position={[60, 80, 40]} intensity={1.3} color="#FFE4B5" castShadow
+   169→        shadow-mapSize-width={1024} shadow-mapSize-height={1024}
+   170→        shadow-camera-far={200} shadow-camera-left={-60} shadow-camera-right={60}
+   171→        shadow-camera-top={60} shadow-camera-bottom={-60} />
+   172→      <hemisphereLight args={['#87CEEB', '#4A7023', 0.35]} />
+   173→
+   174→      {/* Sky & Fog */}
+   175→      <Sky sunPosition={[100, 45, 30]} turbidity={3} rayleigh={0.5} />
+   176→      <fog attach="fog" args={['#C8DDB5', 80, 350]} />
+   177→
+   178→      {/* ── Ground ───────────────────────────── */}
+   179→      <mesh rotation-x={-Math.PI / 2} position-y={-0.01} receiveShadow>
+   180→        <planeGeometry args={[700, 700]} />
+   181→        <meshLambertMaterial color={chaos ? '#4A5C2E' : '#5B8C3E'} />
+   182→      </mesh>
+   183→      <mesh rotation-x={-Math.PI / 2} position-y={0.005}>
+   184→        <planeGeometry args={[700, 700, 70, 70]} />
+   185→        <meshBasicMaterial color="#528435" wireframe transparent opacity={0.06} />
+   186→      </mesh>
+   187→
+   188→      {/* ── Player (Kleiner Mops / Dog) ─────── */}
+   189→      <group ref={playerGrp}>
+   190→        {/* body */}
+   191→        <mesh position-y={0.28} castShadow>
+   192→          <boxGeometry args={[0.38, 0.22, 0.24]} />
+   193→          <meshLambertMaterial color="#D4845A" />
+   194→        </mesh>
+   195→        {/* chest (slightly wider front) */}
+   196→        <mesh position={[0, 0.30, 0.04]} castShadow>
+   197→          <boxGeometry args={[0.24, 0.18, 0.20]} />
+   198→          <meshLambertMaterial color="#D4845A" />
+   199→        </mesh>
+   200→        {/* head */}
+   201→        <mesh position={[0, 0.44, 0.16]} castShadow>
+   202→          <sphereGeometry args={[0.11, 8, 6]} />
+   203→          <meshLambertMaterial color="#E8B88A" />
+   204→        </mesh>
+   205→        {/* muzzle */}
+   206→        <mesh position={[0, 0.42, 0.26]} castShadow>
+   207→          <boxGeometry args={[0.08, 0.06, 0.08]} />
+   208→          <meshLambertMaterial color="#E8C0A0" />
+   209→        </mesh>
+   210→        {/* nose */}
+   211→        <mesh position={[0, 0.43, 0.31]}>
+   212→          <sphereGeometry args={[0.02, 6, 4]} />
+   213→          <meshBasicMaterial color="#222" />
+   214→        </mesh>
+   215→        {/* eyes */}
+   216→        <mesh position={[-0.04, 0.47, 0.24]}>
+   217→          <sphereGeometry args={[0.02, 6, 4]} />
+   218→          <meshBasicMaterial color="#111" />
+   219→        </mesh>
+   220→        <mesh position={[0.04, 0.47, 0.24]}>
+   221→          <sphereGeometry args={[0.02, 6, 4]} />
+   222→          <meshBasicMaterial color="#111" />
+   223→        </mesh>
+   224→        {/* ears (floppy) */}
+   225→        <mesh position={[-0.09, 0.50, 0.12]} rotation-z={0.4} rotation-x={-0.2}>
+   226→          <boxGeometry args={[0.06, 0.10, 0.03]} />
+   227→          <meshLambertMaterial color="#B8734A" />
+   228→        </mesh>
+   229→        <mesh position={[0.09, 0.50, 0.12]} rotation-z={-0.4} rotation-x={-0.2}>
+   230→          <boxGeometry args={[0.06, 0.10, 0.03]} />
+   231→          <meshLambertMaterial color="#B8734A" />
+   232→        </mesh>
+   233→        {/* front legs */}
+   234→        <mesh position={[-0.10, 0.08, 0.08]} castShadow>
+   235→          <boxGeometry args={[0.06, 0.16, 0.06]} />
+   236→          <meshLambertMaterial color="#C47A4F" />
+   237→        </mesh>
+   238→        <mesh position={[0.10, 0.08, 0.08]} castShadow>
+   239→          <boxGeometry args={[0.06, 0.16, 0.06]} />
+   240→          <meshLambertMaterial color="#C47A4F" />
+   241→        </mesh>
+   242→        {/* back legs */}
+   243→        <mesh position={[-0.10, 0.08, -0.08]} castShadow>
+   244→          <boxGeometry args={[0.06, 0.16, 0.06]} />
+   245→          <meshLambertMaterial color="#C47A4F" />
+   246→        </mesh>
+   247→        <mesh position={[0.10, 0.08, -0.08]} castShadow>
+   248→          <boxGeometry args={[0.06, 0.16, 0.06]} />
+   249→          <meshLambertMaterial color="#C47A4F" />
+   250→        </mesh>
+   251→        {/* tail (curled up, wagging) */}
+   252→        <mesh ref={tailRef} position={[0, 0.38, -0.16]} rotation-x={-0.8}>
+   253→          <cylinderGeometry args={[0.015, 0.02, 0.12, 6]} />
+   254→          <meshLambertMaterial color="#B8734A" />
+   255→        </mesh>
+   256→      </group>
+   257→
+   258→      {/* ── Bauwagen ──────────────────────────── */}
+   259→      <Bauwagen />
+   260→
+   261→      {/* ── Baustelle Alpha ───────────────────── */}
+   262→      <BaustelleAlpha />
+   263→      {/* Checkpoints (world space) */}
+   264→      <CheckpointMarker position={KP_A1_POS} done={kp1aDone} label="A1" />
+   265→      <CheckpointMarker position={KP_A2_POS} done={kp1bDone} label="A2" />
+   266→      {/* Bauarbeiter */}
+   267→      <Bauarbeiter position={[ARBEITER_POS.x, 0, ARBEITER_POS.z]} />
+   268→
+   269→      {/* ── Professor Mops ───────────────────── */}
+   270→      <group position={[PROF_POS.x, 0, PROF_POS.z]} rotation-y={0.3}>
+   271→        <mesh position-y={1.05} castShadow><boxGeometry args={[0.5, 0.85, 0.35]} /><meshLambertMaterial color="#4A5D3A" /></mesh>
+   272→        <mesh position-y={1.1} castShadow><boxGeometry args={[0.54, 0.55, 0.39]} /><meshLambertMaterial color="#6B4423" /></mesh>
+   273→        <mesh position={[-0.35, 0.95, 0]}><boxGeometry args={[0.08, 0.1, 0.08]} /><meshLambertMaterial color="#8B6B3D" /></mesh>
+   274→        <mesh position={[0.35, 0.95, 0]}><boxGeometry args={[0.08, 0.1, 0.08]} /><meshLambertMaterial color="#8B6B3D" /></mesh>
+   275→        <mesh position-y={1.7} castShadow><sphereGeometry args={[0.22, 8, 6]} /><meshLambertMaterial color="#E8C8A0" /></mesh>
+   276→        <mesh position={[-0.09, 1.74, 0.18]}><boxGeometry args={[0.07, 0.05, 0.02]} /><meshBasicMaterial color="#333" /></mesh>
+   277→        <mesh position={[0.09, 1.74, 0.18]}><boxGeometry args={[0.07, 0.05, 0.02]} /><meshBasicMaterial color="#333" /></mesh>
+   278→        <mesh position={[0, 1.74, 0.19]}><boxGeometry args={[0.04, 0.015, 0.02]} /><meshBasicMaterial color="#333" /></mesh>
+   279→        <mesh position-y={1.88} castShadow><cylinderGeometry args={[0.28, 0.22, 0.1, 8]} /><meshLambertMaterial color="#3A2F1E" /></mesh>
+   280→        <mesh position={[0, 1.84, 0.05]} castShadow><boxGeometry args={[0.55, 0.04, 0.2]} /><meshLambertMaterial color="#3A2F1E" /></mesh>
+   281→        <mesh position={[-0.09, 1.73, 0.19]}><sphereGeometry args={[0.025, 6, 4]} /><meshBasicMaterial color="#224" /></mesh>
+   282→        <mesh position={[0.09, 1.73, 0.19]}><sphereGeometry args={[0.025, 6, 4]} /><meshBasicMaterial color="#224" /></mesh>
+   283→        <mesh position={[0, 1.6, 0.17]}><boxGeometry args={[0.14, 0.08, 0.06]} /><meshLambertMaterial color="#B8B8B8" /></mesh>
+   284→        <mesh position={[-0.12, 0.3, 0]} castShadow><boxGeometry args={[0.15, 0.5, 0.15]} /><meshLambertMaterial color="#3D3D2E" /></mesh>
+   285→        <mesh position={[0.12, 0.3, 0]} castShadow><boxGeometry args={[0.15, 0.5, 0.15]} /><meshLambertMaterial color="#3D3D2E" /></mesh>
+   286→        <mesh position={[-0.35, 1.0, 0]} castShadow><boxGeometry args={[0.12, 0.5, 0.12]} /><meshLambertMaterial color="#4A5D3A" /></mesh>
+   287→        <mesh position={[0.32, 0.85, 0.15]} castShadow><boxGeometry args={[0.12, 0.5, 0.12]} /><meshLambertMaterial color="#4A5D3A" /></mesh>
+   288→        <mesh position={[0.38, 0.65, 0.22]} rotation-z={0.15}><boxGeometry args={[0.2, 0.28, 0.04]} /><meshLambertMaterial color="#8B4513" /></mesh>
+   289→        <mesh position={[0, 2.2, 0]} rotation-x={-0.25}><boxGeometry args={[0.9, 0.14, 0.02]} /><meshBasicMaterial color="#1A1A1A" /></mesh>
+   290→      </group>
+   291→
+   292→      {/* ── Cordula.py ───────────────────────── */}
+   293→      <group position={[CORDULA_POS.x, 0, CORDULA_POS.z]} rotation-y={-0.5}>
+   294→        <mesh position={[0, 0.45, 0]} rotation-x={cordulaAwake ? 0.05 : 0.3} castShadow>
+   295→          <boxGeometry args={[0.45, 0.7, 0.35]} /><meshLambertMaterial color="#2D3748" />
+   296→        </mesh>
+   297→        <mesh position={[0.05, cordulaAwake ? 1.05 : 0.9, cordulaAwake ? 0.05 : 0.25]} rotation-x={cordulaAwake ? 0 : 0.8} castShadow>
+   298→          <sphereGeometry args={[0.2, 8, 6]} /><meshLambertMaterial color="#F0D0B0" />
+   299→        </mesh>
+   300→        <mesh position={[0.05, cordulaAwake ? 1.18 : 1.02, cordulaAwake ? 0 : 0.2]} rotation-x={cordulaAwake ? 0 : 0.8}>
+   301→          <boxGeometry args={[0.35, 0.15, 0.3]} /><meshLambertMaterial color="#4A2800" />
+   302→        </mesh>
+   303→        {cordulaAwake ? (
+   304→          <>
+   305→            <mesh position={[-0.02, 1.08, 0.2]}><sphereGeometry args={[0.025, 6, 4]} /><meshBasicMaterial color="#111" /></mesh>
+   306→            <mesh position={[0.1, 1.08, 0.2]}><sphereGeometry args={[0.025, 6, 4]} /><meshBasicMaterial color="#111" /></mesh>
+   307→          </>
+   308→        ) : (
+   309→          <>
+   310→            <mesh position={[-0.05, 0.93, 0.4]} rotation-x={0.8}><boxGeometry args={[0.06, 0.01, 0.01]} /><meshBasicMaterial color="#333" /></mesh>
+   311→            <mesh position={[0.1, 0.93, 0.4]} rotation-x={0.8}><boxGeometry args={[0.06, 0.01, 0.01]} /><meshBasicMaterial color="#333" /></mesh>
+   312→          </>
+   313→        )}
+   314→        <mesh position={[0, 0.12, 0.35]} castShadow><boxGeometry args={[0.35, 0.12, 0.5]} /><meshLambertMaterial color="#1A202C" /></mesh>
+   315→        <mesh position={[0, 0.75, 0.15]} rotation-x={-0.1} castShadow><boxGeometry args={[0.4, 0.02, 0.28]} /><meshLambertMaterial color="#555" /></mesh>
+   316→        <mesh position={[0, 0.95, 0.02]} rotation-x={-0.6} castShadow>
+   317→          <boxGeometry args={[0.38, 0.25, 0.015]} /><meshBasicMaterial color={cordulaAwake ? '#0A4A0A' : '#1A3A1A'} />
+   318→        </mesh>
+   319→        <pointLight position={[0, 0.95, 0.05]} color="#00FF41" intensity={cordulaAwake ? 0.4 : 0.15} distance={cordulaAwake ? 2.5 : 1.5} />
+   320→        {!cordulaAwake && <CordulaZParticles />}
+   321→      </group>
+   322→
+   323→      {/* ── Der Stein ────────────────────────── */}
+   324→      <group position={[STEIN_POS.x, 0, STEIN_POS.z]}>
+   325→        <mesh position={[0, 0.2, 0]} castShadow><dodecahedronGeometry args={[0.3, 0]} /><meshLambertMaterial color="#7A7A6E" /></mesh>
+   326→        <mesh position={[0.15, 0.12, 0.1]} castShadow><dodecahedronGeometry args={[0.15, 0]} /><meshLambertMaterial color="#8A8A7E" /></mesh>
+   327→        <mesh position={[-0.1, 0.1, -0.12]}><dodecahedronGeometry args={[0.12, 0]} /><meshLambertMaterial color="#6E6E62" /></mesh>
+   328→      </group>
+   329→
+   330→      {/* ── Die Shanehaube (Secret) ──────────── */}
+   331→      <group position={[SHANE_POS.x, 0, SHANE_POS.z]} rotation-y={0.4}>
+   332→        <mesh position={[0, 0.42, 0]} castShadow><boxGeometry args={[0.8, 0.35, 0.5]} /><meshLambertMaterial color="#8B6914" /></mesh>
+   333→        <mesh position={[0, 0.48, 0]}><boxGeometry args={[0.7, 0.24, 0.4]} /><meshLambertMaterial color="#6B4F12" /></mesh>
+   334→        <mesh position={[0, 0.18, 0.32]} rotation-x={Math.PI / 2}><torusGeometry args={[0.17, 0.035, 6, 12]} /><meshLambertMaterial color="#333" /></mesh>
+   335→        <mesh position={[0, 0.18, 0.32]} rotation-z={Math.PI / 2}><cylinderGeometry args={[0.015, 0.015, 0.5, 6]} /><meshLambertMaterial color="#444" /></mesh>
+   336→        <mesh position={[-0.25, 0.14, -0.18]} castShadow><boxGeometry args={[0.05, 0.28, 0.05]} /><meshLambertMaterial color="#555" /></mesh>
+   337→        <mesh position={[0.25, 0.14, -0.18]} castShadow><boxGeometry args={[0.05, 0.28, 0.05]} /><meshLambertMaterial color="#555" /></mesh>
+   338→        <mesh position={[-0.15, 0.48, -0.42]} rotation-x={0.3}><cylinderGeometry args={[0.018, 0.018, 0.5, 6]} /><meshLambertMaterial color="#6B4F12" /></mesh>
+   339→        <mesh position={[0.15, 0.48, -0.42]} rotation-x={0.3}><cylinderGeometry args={[0.018, 0.018, 0.5, 6]} /><meshLambertMaterial color="#6B4F12" /></mesh>
+   340→        <mesh position={[0, 0.68, 0]} castShadow><sphereGeometry args={[0.065, 8, 6]} /><meshLambertMaterial color="#DC143C" /></mesh>
+   341→        <mesh position={[0.02, 0.78, 0.02]}><cylinderGeometry args={[0.007, 0.007, 0.14, 4]} /><meshLambertMaterial color="#228B22" /></mesh>
+   342→        <mesh position={[0.025, 0.71, 0.04]}><sphereGeometry args={[0.018, 6, 4]} /><meshBasicMaterial color="#FF6B6B" transparent opacity={0.7} /></mesh>
+   343→      </group>
+   344→
+   345→      {/* ── Trees ─────────────────────────────── */}
+   346→      <LowPolyTree pos={[-8, 0, 35]} scale={1.1} />
+   347→      <LowPolyTree pos={[15, 0, 45]} scale={0.9} />
+   348→      <LowPolyTree pos={[-20, 0, 60]} scale={1.3} />
+   349→      <LowPolyTree pos={[30, 0, 55]} scale={1.0} />
+   350→      <LowPolyTree pos={[-35, 0, 85]} scale={1.2} />
+   351→      <LowPolyTree pos={[5, 0, 120]} scale={0.8} />
+   352→      <LowPolyTree pos={[-15, 0, 140]} scale={1.1} />
+   353→      <LowPolyTree pos={[25, 0, 130]} scale={1.4} />
+   354→      <LowPolyTree pos={[-10, 0, 15]} scale={0.7} />
+   355→      <LowPolyTree pos={[35, 0, 20]} scale={1.0} />
+   356→      <LowPolyTree pos={[-40, 0, 40]} scale={1.5} />
+   357→      <LowPolyTree pos={[70, 0, 90]} scale={0.9} />
+   358→      <LowPolyTree pos={[40, 0, 100]} scale={1.1} />
+   359→      <LowPolyTree pos={[75, 0, 70]} scale={1.0} />
+   360→
+   361→      {/* ── Path Markers ──────────────────────── */}
+   362→      <PathMarker pos={[3, 0, 15]} />
+   363→      <PathMarker pos={[15, 0, 30]} />
+   364→      <PathMarker pos={[25, 0, 50]} />
+   365→      <PathMarker pos={[35, 0, 65]} />
+   366→      <PathMarker pos={[45, 0, 75]} />
+   367→
+   368→      {/* ── Decorative Rocks ──────────────────── */}
+   369→      <mesh position={[-12, 0.08, 50]} castShadow><dodecahedronGeometry args={[0.18, 0]} /><meshLambertMaterial color="#7A7A6E" /></mesh>
+   370→      <mesh position={[18, 0.06, 65]} castShadow><dodecahedronGeometry args={[0.12, 0]} /><meshLambertMaterial color="#8A8A7E" /></mesh>
+   371→      <mesh position={[-28, 0.1, 95]} castShadow><dodecahedronGeometry args={[0.22, 0]} /><meshLambertMaterial color="#6E6E62" /></mesh>
+   372→
+   373→      {/* ── Wind Particles ─────────────────────── */}
+   374→      <WindParticles />
+   375→    </>
+   376→  )
+   377→}
+   378→
+   379→/* ═══════════════════════════════════════════════ */
+   380→/* ── Sub-components ────────────────────────────── */
+   381→/* ═══════════════════════════════════════════════ */
+   382→
+   383→const UP = new THREE.Vector3(0, 1, 0)
+   384→
+   385→/* ── Bauwagen (Construction Trailer) ─────────── */
+   386→function Bauwagen() {
+   387→  const blinkRef = useRef<THREE.Mesh>(null!)
+   388→  useFrame(({ clock }) => {
+   389→    if (blinkRef.current) {
+   390→      const on = Math.sin(clock.getElapsedTime() * 4) > 0
+   391→      blinkRef.current.visible = on
+   392→    }
+   393→  })
+   394→  return (
+   395→    <group position={[BAUWAGEN_POS.x, 0, BAUWAGEN_POS.z]}>
+   396→      {/* floor (wooden frame) */}
+   397→      <mesh position-y={0.06} receiveShadow><boxGeometry args={[4.0, 0.12, 2.2]} /><meshLambertMaterial color="#8B7355" /></mesh>
+   398→      {/* undercarriage / frame rails */}
+   399→      <mesh position={[0, -0.02, 0]}><boxGeometry args={[4.2, 0.06, 0.12]} /><meshLambertMaterial color="#555" /></mesh>
+   400→      <mesh position={[0, -0.02, -0.8]}><boxGeometry args={[4.2, 0.06, 0.12]} /><meshLambertMaterial color="#555" /></mesh>
+   401→      {/* axle */}
+   402→      <mesh position={[0, -0.15, 0.6]}><boxGeometry args={[0.08, 0.08, 1.4]} /><meshLambertMaterial color="#444" /></mesh>
+   403→      {/* wheels (back) */}
+   404→      <group position={[0, -0.15, 0.6]}>
+   405→        <mesh position={[-0.7, 0, 0]} rotation-z={Math.PI / 2}><cylinderGeometry args={[0.22, 0.22, 0.1, 12]} /><meshLambertMaterial color="#222" /></mesh>
+   406→        <mesh position={[0.7, 0, 0]} rotation-z={Math.PI / 2}><cylinderGeometry args={[0.22, 0.22, 0.1, 12]} /><meshLambertMaterial color="#222" /></mesh>
+   407→      </group>
+   408→
+   409→      {/* Stuetzfuesser (4 corners) */}
+   410→      <mesh position={[-1.8, -0.1, -0.9]}><boxGeometry args={[0.06, 0.2, 0.06]} /><meshLambertMaterial color="#666" /></mesh>
+   411→      <mesh position={[-1.8, -0.2, -0.9]}><boxGeometry args={[0.14, 0.04, 0.14]} /><meshLambertMaterial color="#555" /></mesh>
+   412→      <mesh position={[1.8, -0.1, -0.9]}><boxGeometry args={[0.06, 0.2, 0.06]} /><meshLambertMaterial color="#666" /></mesh>
+   413→      <mesh position={[1.8, -0.2, -0.9]}><boxGeometry args={[0.14, 0.04, 0.14]} /><meshLambertMaterial color="#555" /></mesh>
+   414→      <mesh position={[-1.8, -0.1, 0.9]}><boxGeometry args={[0.06, 0.2, 0.06]} /><meshLambertMaterial color="#666" /></mesh>
+   415→      <mesh position={[-1.8, -0.2, 0.9]}><boxGeometry args={[0.14, 0.04, 0.14]} /><meshLambertMaterial color="#555" /></mesh>
+   416→      <mesh position={[1.8, -0.1, 0.9]}><boxGeometry args={[0.06, 0.2, 0.06]} /><meshLambertMaterial color="#666" /></mesh>
+   417→      <mesh position={[1.8, -0.2, 0.9]}><boxGeometry args={[0.14, 0.04, 0.14]} /><meshLambertMaterial color="#555" /></mesh>
+   418→
+   419→      {/* back wall */}
+   420→      <mesh position={[0, 1.2, -0.95]} castShadow><boxGeometry args={[4.0, 2.2, 0.1]} /><meshLambertMaterial color="#D4C8B0" /></mesh>
+   421→      {/* left wall */}
+   422→      <mesh position={[-1.95, 1.2, 0]} castShadow><boxGeometry args={[0.1, 2.2, 2.0]} /><meshLambertMaterial color="#D4C8B0" /></mesh>
+   423→      {/* right wall */}
+   424→      <mesh position={[1.95, 1.2, 0]} castShadow><boxGeometry args={[0.1, 2.2, 2.0]} /><meshLambertMaterial color="#D4C8B0" /></mesh>
+   425→      {/* roof */}
+   426→      <mesh position-y={2.36} castShadow><boxGeometry args={[4.3, 0.12, 2.4]} /><meshLambertMaterial color="#6B6B6B" /></mesh>
+   427→      {/* roof ridge (slight angle) */}
+   428→      <mesh position-y={2.42}><boxGeometry args={[4.3, 0.06, 0.3]} /><meshLambertMaterial color="#5A5A5A" /></mesh>
+   429→
+   430→      {/* left window (with frame) */}
+   431→      <mesh position={[-1.96, 1.4, 0]}><boxGeometry args={[0.02, 0.6, 0.8]} /><meshBasicMaterial color="#87CEEB" transparent opacity={0.5} /></mesh>
+   432→      <mesh position={[-1.97, 1.4, 0]}><boxGeometry args={[0.03, 0.7, 0.04]} /><meshLambertMaterial color="#888" /></mesh>
+   433→      <mesh position={[-1.97, 1.4, 0]}><boxGeometry args={[0.03, 0.04, 0.9]} /><meshLambertMaterial color="#888" /></mesh>
+   434→      {/* right window (with frame) */}
+   435→      <mesh position={[1.96, 1.4, 0]}><boxGeometry args={[0.02, 0.6, 0.8]} /><meshBasicMaterial color="#87CEEB" transparent opacity={0.5} /></mesh>
+   436→      <mesh position={[1.97, 1.4, 0]}><boxGeometry args={[0.03, 0.7, 0.04]} /><meshLambertMaterial color="#888" /></mesh>
+   437→      <mesh position={[1.97, 1.4, 0]}><boxGeometry args={[0.03, 0.04, 0.9]} /><meshLambertMaterial color="#888" /></mesh>
+   438→
+   439→      {/* front wall strip (sides of door opening) */}
+   440→      <mesh position={[-1.2, 1.2, 0.95]}><boxGeometry args={[0.6, 2.2, 0.1]} /><meshLambertMaterial color="#D4C8B0" /></mesh>
+   441→      <mesh position={[1.2, 1.2, 0.95]}><boxGeometry args={[0.6, 2.2, 0.1]} /><meshLambertMaterial color="#D4C8B0" /></mesh>
+   442→      {/* door frame top */}
+   443→      <mesh position={[0, 2.2, 0.95]}><boxGeometry args={[1.4, 0.15, 0.1]} /><meshLambertMaterial color="#C0B498" /></mesh>
+   444→
+   445→      {/* counter/desk inside */}
+   446→      <mesh position={[0, 0.5, -0.5]} castShadow><boxGeometry args={[2.5, 0.8, 0.5]} /><meshLambertMaterial color="#8B6914" /></mesh>
+   447→      {/* counter top */}
+   448→      <mesh position={[0, 0.92, -0.5]}><boxGeometry args={[2.6, 0.04, 0.55]} /><meshLambertMaterial color="#A07828" /></mesh>
+   449→
+   450→      {/* papers on desk */}
+   451→      <mesh position={[-0.4, 0.96, -0.4]} rotation-y={0.2}><boxGeometry args={[0.25, 0.01, 0.18]} /><meshLambertMaterial color="#F5F0E0" /></mesh>
+   452→      <mesh position={[-0.15, 0.97, -0.35]} rotation-y={-0.1}><boxGeometry args={[0.22, 0.01, 0.16]} /><meshLambertMaterial color="#E8E0D0" /></mesh>
+   453→      {/* coffee mug on desk */}
+   454→      <mesh position={[0.5, 0.99, -0.4]}><cylinderGeometry args={[0.03, 0.025, 0.06, 8]} /><meshLambertMaterial color="#8B4513" /></mesh>
+   455→
+   456→      {/* ── Raffi (behind counter) ─────────── */}
+   457→      <group position={[0, 0.12, -0.5]} rotation-y={Math.PI}>
+   458→        <mesh position-y={1.0} castShadow><boxGeometry args={[0.5, 0.9, 0.35]} /><meshLambertMaterial color="#6B7B8D" /></mesh>
+   459→        <mesh position-y={1.1} castShadow><boxGeometry args={[0.54, 0.5, 0.39]} /><meshLambertMaterial color="#E8842A" /></mesh>
+   460→        <mesh position={[0, 1.0, 0.2]}><boxGeometry args={[0.5, 0.04, 0.01]} /><meshBasicMaterial color="#FFD700" /></mesh>
+   461→        <mesh position={[0, 1.15, 0.2]}><boxGeometry args={[0.5, 0.04, 0.01]} /><meshBasicMaterial color="#FFD700" /></mesh>
+   462→        <mesh position-y={1.68} castShadow><sphereGeometry args={[0.22, 8, 6]} /><meshLambertMaterial color="#F0C8A0" /></mesh>
+   463→        <mesh position-y={1.88} castShadow><cylinderGeometry args={[0.18, 0.27, 0.12, 8]} /><meshLambertMaterial color="#FF6B35" /></mesh>
+   464→        <mesh position={[-0.08, 1.72, 0.18]}><sphereGeometry args={[0.03, 6, 4]} /><meshBasicMaterial color="#111" /></mesh>
+   465→        <mesh position={[0.08, 1.72, 0.18]}><sphereGeometry args={[0.03, 6, 4]} /><meshBasicMaterial color="#111" /></mesh>
+   466→        <mesh position={[0, 1.63, 0.2]}><boxGeometry args={[0.16, 0.03, 0.04]} /><meshLambertMaterial color="#5A3E28" /></mesh>
+   467→        <mesh position={[-0.12, 0.3, 0]} castShadow><boxGeometry args={[0.15, 0.5, 0.15]} /><meshLambertMaterial color="#4A5568" /></mesh>
+   468→        <mesh position={[0.12, 0.3, 0]} castShadow><boxGeometry args={[0.15, 0.5, 0.15]} /><meshLambertMaterial color="#4A5568" /></mesh>
+   469→        <mesh position={[-0.35, 1.0, 0]} castShadow><boxGeometry args={[0.12, 0.55, 0.12]} /><meshLambertMaterial color="#6B7B8D" /></mesh>
+   470→        <mesh position={[0.35, 1.0, 0]} castShadow><boxGeometry args={[0.12, 0.55, 0.12]} /><meshLambertMaterial color="#6B7B8D" /></mesh>
+   471→      </group>
+   472→
+   473→      {/* BAULEITUNG sign (above door) */}
+   474→      <mesh position={[0, 1.9, 0.98]}><boxGeometry args={[1.6, 0.2, 0.02]} /><meshBasicMaterial color="#1A1A1A" /></mesh>
+   475→      {/* iMOPS mini-logo on sign */}
+   476→      <mesh position={[0, 1.9, 0.995]}><boxGeometry args={[0.5, 0.1, 0.01]} /><meshBasicMaterial color="#E8842A" /></mesh>
+   477→
+   478→      {/* step */}
+   479→      <mesh position={[0, 0.06, 1.4]}><boxGeometry args={[1.2, 0.12, 0.6]} /><meshLambertMaterial color="#888" /></mesh>
+   480→      {/* step 2 */}
+   481→      <mesh position={[0, 0.12, 1.65]}><boxGeometry args={[1.0, 0.06, 0.3]} /><meshLambertMaterial color="#777" /></mesh>
+   482→
+   483→      {/* small awning over door */}
+   484→      <mesh position={[0, 2.15, 1.2]}><boxGeometry args={[1.8, 0.04, 0.6]} /><meshLambertMaterial color="#8B7355" /></mesh>
+   485→      {/* awning supports */}
+   486→      <mesh position={[-0.8, 1.6, 1.4]}><boxGeometry args={[0.04, 0.6, 0.04]} /><meshLambertMaterial color="#6B5B45" /></mesh>
+   487→      <mesh position={[0.8, 1.6, 1.4]}><boxGeometry args={[0.04, 0.6, 0.04]} /><meshLambertMaterial color="#6B5B45" /></mesh>
+   488→
+   489→      {/* blinking lamp on awning */}
+   490→      <mesh position={[0, 2.25, 1.45]}><boxGeometry args={[0.12, 0.12, 0.12]} /><meshLambertMaterial color="#555" /></mesh>
+   491→      <mesh ref={blinkRef} position={[0, 2.35, 1.45]}><sphereGeometry args={[0.06, 6, 4]} /><meshBasicMaterial color="#FFD700" /></mesh>
+   492→      <pointLight position={[0, 2.35, 1.45]} color="#FFD700" intensity={0.5} distance={5} />
+   493→
+   494→      {/* Baustellenschild next to Bauwagen */}
+   495→      <group position={[3.2, 0, 1.5]}>
+   496→        <mesh position-y={0.8}><boxGeometry args={[0.06, 1.6, 0.06]} /><meshLambertMaterial color="#888" /></mesh>
+   497→        <mesh position-y={1.55}><boxGeometry args={[1.8, 0.6, 0.04]} /><meshLambertMaterial color="#E8842A" /></mesh>
+   498→        <mesh position-y={1.55}><boxGeometry args={[1.5, 0.06, 0.02]} /><meshBasicMaterial color="#FFF" /></mesh>
+   499→        {/* tiny blinker on sign */}
+   500→        <mesh position={[0, 1.9, 0]}><boxGeometry args={[0.08, 0.15, 0.08]} /><meshLambertMaterial color="#444" /></mesh>
+   501→        <mesh position={[0, 1.98, 0]}><sphereGeometry args={[0.035, 6, 4]} /><meshBasicMaterial color="#FF4500" /></mesh>
+   502→        <pointLight position={[0, 1.98, 0]} color="#FF4500" intensity={0.3} distance={3} />
+   503→      </group>
+   504→
+   505→      {/* interior light */}
+   506→      <pointLight position={[0, 1.8, -0.3]} color="#FFE4B5" intensity={0.6} distance={4} />
+   507→      {/* door light cone (spill light) */}
+   508→      <pointLight position={[0, 1.0, 1.2]} color="#FFE4B5" intensity={0.3} distance={4} />
+   509→
+   510→      {/* Paletten vor dem Bauwagen */}
+   511→      <Baupalette position={[-2.5, 0, 2.8]} />
+   512→      <Baupalette position={[-1.0, 0, 3.2]} rotation={0.15} />
+   513→      {/* sand/lime sack on palette */}
+   514→      <mesh position={[-2.5, 0.18, 2.8]}><boxGeometry args={[0.35, 0.25, 0.35]} /><meshLambertMaterial color="#C8B88A" /></mesh>
+   515→      <mesh position={[-1.0, 0.18, 3.2]} rotation-y={0.15}><boxGeometry args={[0.3, 0.22, 0.3]} /><meshLambertMaterial color="#D4C8B0" /></mesh>
+   516→    </group>
+   517→  )
+   518→}
+   519→
+   520→/* ── Checkpoint Marker ─────────────────────────── */
+   521→function CheckpointMarker({ position, done, label: _label }: { position: THREE.Vector3; done: boolean; label: string }) {
+   522→  const ringRef = useRef<THREE.Mesh>(null!)
+   523→  const color = done ? '#4CAF50' : '#FFD700'
+   524→  const lightColor = done ? '#4CAF50' : '#FFD700'
+   525→
+   526→  useFrame(({ clock }) => {
+   527→    if (ringRef.current && !done) {
+   528→      ringRef.current.rotation.y = clock.getElapsedTime() * 1.2
+   529→    }
+   530→  })
+   531→
+   532→  return (
+   533→    <group position={[position.x, 0, position.z]}>
+   534→      {/* base */}
+   535→      <mesh position-y={0.025}><cylinderGeometry args={[0.18, 0.2, 0.05, 8]} /><meshLambertMaterial color="#888" /></mesh>
+   536→      {/* pole */}
+   537→      <mesh position-y={0.6}><cylinderGeometry args={[0.03, 0.03, 1.1, 6]} /><meshLambertMaterial color={color} /></mesh>
+   538→      {/* top sphere */}
+   539→      <mesh position-y={1.2}><sphereGeometry args={[0.09, 8, 6]} /><meshBasicMaterial color={color} /></mesh>
+   540→      {/* rotating ring */}
+   541→      <mesh ref={ringRef} position-y={0.95} rotation-x={Math.PI / 2}>
+   542→        <torusGeometry args={[0.2, 0.015, 6, 16]} />
+   543→        <meshBasicMaterial color={color} transparent opacity={done ? 0.3 : 0.7} />
+   544→      </mesh>
+   545→      {/* light */}
+   546→      <pointLight position-y={1.2} color={lightColor} intensity={done ? 0.3 : 0.7} distance={4} />
+   547→      {/* ground glow */}
+   548→      <mesh rotation-x={-Math.PI / 2} position-y={0.02}>
+   549→        <circleGeometry args={[0.4, 12]} />
+   550→        <meshBasicMaterial color={color} transparent opacity={done ? 0.08 : 0.15} />
+   551→      </mesh>
+   552→    </group>
+   553→  )
+   554→}
+   555→
+   556→/* ── Baustelle Alpha ──────────────────────────── */
+   557→function BaustelleAlpha() {
+   558→  return (
+   559→    <group position={[SITE1_CENTER.x, 0, SITE1_CENTER.z]}>
+   560→      {/* ground area (sand/gravel) */}
+   561→      <mesh rotation-x={-Math.PI / 2} position-y={0.008} receiveShadow>
+   562→        <planeGeometry args={[30, 25]} />
+   563→        <meshLambertMaterial color="#C4A870" />
+   564→      </mesh>
+   565→
+   566→      {/* half wall (concrete) */}
+   567→      <mesh position={[-4, 1.25, -5]} castShadow>
+   568→        <boxGeometry args={[10, 2.5, 0.3]} />
+   569→        <meshLambertMaterial color="#A0A0A0" />
+   570→      </mesh>
+   571→      {/* wall top edge */}
+   572→      <mesh position={[-4, 2.52, -5]}>
+   573→        <boxGeometry args={[10.2, 0.06, 0.35]} />
+   574→        <meshLambertMaterial color="#888" />
+   575→      </mesh>
+   576→
+   577→      {/* scaffolding */}
+   578→      {/* vertical poles */}
+   579→      <mesh position={[-6, 1.5, -4.5]}><cylinderGeometry args={[0.04, 0.04, 3, 6]} /><meshLambertMaterial color="#B8734A" /></mesh>
+   580→      <mesh position={[-2, 1.5, -4.5]}><cylinderGeometry args={[0.04, 0.04, 3, 6]} /><meshLambertMaterial color="#B8734A" /></mesh>
+   581→      <mesh position={[-6, 1.5, -5.5]}><cylinderGeometry args={[0.04, 0.04, 3, 6]} /><meshLambertMaterial color="#B8734A" /></mesh>
+   582→      <mesh position={[-2, 1.5, -5.5]}><cylinderGeometry args={[0.04, 0.04, 3, 6]} /><meshLambertMaterial color="#B8734A" /></mesh>
+   583→      {/* platforms */}
+   584→      <mesh position={[-4, 1.5, -5]}><boxGeometry args={[4.5, 0.06, 1.2]} /><meshLambertMaterial color="#DEB887" /></mesh>
+   585→      <mesh position={[-4, 2.5, -5]}><boxGeometry args={[4.5, 0.06, 1.2]} /><meshLambertMaterial color="#DEB887" /></mesh>
+   586→      {/* scaffolding diagonal brace */}
+   587→      <mesh position={[-4, 1.5, -5]} rotation-y={0.6}><boxGeometry args={[0.03, 3.5, 0.03]} /><meshLambertMaterial color="#A06030" /></mesh>
+   588→
+   589→      {/* material pile 1 (wood planks) */}
+   590→      <mesh position={[5, 0.2, 3]} castShadow><boxGeometry args={[1.2, 0.4, 0.8]} /><meshLambertMaterial color="#8B6914" /></mesh>
+   591→      <mesh position={[5, 0.55, 3]} castShadow><boxGeometry args={[1.0, 0.3, 0.7]} /><meshLambertMaterial color="#A07828" /></mesh>
+   592→
+   593→      {/* material pile 2 (bricks) */}
+   594→      <mesh position={[7, 0.15, -2]} castShadow><boxGeometry args={[0.8, 0.3, 0.6]} /><meshLambertMaterial color="#A0522D" /></mesh>
+   595→      <mesh position={[7, 0.15, -1.2]} castShadow><boxGeometry args={[0.8, 0.3, 0.6]} /><meshLambertMaterial color="#CD853F" /></mesh>
+   596→
+   597→      {/* Paletten with materials */}
+   598→      <Baupalette position={[-8, 0, 4]} />
+   599→      <mesh position={[-8, 0.18, 4]}><boxGeometry args={[0.8, 0.3, 0.6]} /><meshLambertMaterial color="#888" /></mesh>
+   600→      <Baupalette position={[-6.5, 0, 4.5]} rotation={0.3} />
+   601→      <mesh position={[-6.5, 0.18, 4.5]} rotation-y={0.3}><boxGeometry args={[0.7, 0.25, 0.5]} /><meshLambertMaterial color="#999" /></mesh>
+   602→      <Baupalette position={[8, 0, 5]} />
+   603→      <mesh position={[8, 0.18, 5]}><boxGeometry args={[0.9, 0.35, 0.6]} /><meshLambertMaterial color="#A0522D" /></mesh>
+   604→      <mesh position={[8, 0.48, 5]}><boxGeometry args={[0.8, 0.3, 0.55]} /><meshLambertMaterial color="#B8703D" /></mesh>
+   605→
+   606→      {/* cement bags pile */}
+   607→      <mesh position={[3, 0.12, 6]}><boxGeometry args={[0.6, 0.24, 0.4]} /><meshLambertMaterial color="#C8B88A" /></mesh>
+   608→      <mesh position={[3.3, 0.32, 6.1]}><boxGeometry args={[0.5, 0.2, 0.35]} /><meshLambertMaterial color="#BDB07A" /></mesh>
+   609→
+   610→      {/* steel rebar bundles */}
+   611→      <mesh position={[10, 0.12, -5]} rotation-z={Math.PI / 2}><cylinderGeometry args={[0.15, 0.15, 2.5, 8]} /><meshLambertMaterial color="#8B4513" /></mesh>
+   612→      <mesh position={[10, 0.12, -4]} rotation-z={Math.PI / 2}><cylinderGeometry args={[0.15, 0.15, 2.5, 8]} /><meshLambertMaterial color="#A0502A" /></mesh>
+   613→
+   614→      {/* site sign */}
+   615→      <mesh position={[0, 1.0, 8]}><boxGeometry args={[0.06, 1.8, 0.06]} /><meshLambertMaterial color="#888" /></mesh>
+   616→      <mesh position={[0, 1.7, 8]}><boxGeometry args={[2.0, 0.5, 0.04]} /><meshBasicMaterial color="#E8842A" /></mesh>
+   617→
+   618→      {/* warning barrier tape (posts + beam) */}
+   619→      <mesh position={[-12, 0.4, 10]}><cylinderGeometry args={[0.03, 0.03, 0.8, 6]} /><meshLambertMaterial color="#FF8C00" /></mesh>
+   620→      <mesh position={[-8, 0.4, 10]}><cylinderGeometry args={[0.03, 0.03, 0.8, 6]} /><meshLambertMaterial color="#FF8C00" /></mesh>
+   621→      <mesh position={[-10, 0.7, 10]}><boxGeometry args={[4.2, 0.08, 0.08]} /><meshLambertMaterial color="#FFD700" /></mesh>
+   622→    </group>
+   623→  )
+   624→}
+   625→
+   626→/* ── Baupalette (Pallet) ───────────────────────── */
+   627→function Baupalette({ position, rotation = 0 }: { position: [number, number, number]; rotation?: number }) {
+   628→  return (
+   629→    <group position={position} rotation-y={rotation}>
+   630→      {/* deck */}
+   631→      <mesh position-y={0.06} castShadow><boxGeometry args={[1.0, 0.04, 0.7]} /><meshLambertMaterial color="#C4A060" /></mesh>
+   632→      {/* support blocks */}
+   633→      <mesh position={[-0.35, 0.03, -0.2]}><boxGeometry args={[0.1, 0.06, 0.15]} /><meshLambertMaterial color="#A08040" /></mesh>
+   634→      <mesh position={[0.35, 0.03, -0.2]}><boxGeometry args={[0.1, 0.06, 0.15]} /><meshLambertMaterial color="#A08040" /></mesh>
+   635→      <mesh position={[-0.35, 0.03, 0.2]}><boxGeometry args={[0.1, 0.06, 0.15]} /><meshLambertMaterial color="#A08040" /></mesh>
+   636→      <mesh position={[0.35, 0.03, 0.2]}><boxGeometry args={[0.1, 0.06, 0.15]} /><meshLambertMaterial color="#A08040" /></mesh>
+   637→      {/* bottom boards */}
+   638→      <mesh position-y={0.015}><boxGeometry args={[0.8, 0.03, 0.06]} /><meshLambertMaterial color="#B09050" /></mesh>
+   639→      <mesh position-y={0.015}><boxGeometry args={[0.8, 0.03, 0.06]} /><meshLambertMaterial color="#B09050" /></mesh>
+   640→    </group>
+   641→  )
+   642→}
+   643→
+   644→/* ── Bauarbeiter (Construction Worker) ────────── */
+   645→function Bauarbeiter({ position }: { position: [number, number, number] }) {
+   646→  return (
+   647→    <group position={position} rotation-y={0.5}>
+   648→      {/* body (blue shirt) */}
+   649→      <mesh position-y={0.85} castShadow><boxGeometry args={[0.38, 0.5, 0.24]} /><meshLambertMaterial color="#4A6FA5" /></mesh>
+   650→      {/* vest (orange) */}
+   651→      <mesh position-y={0.90} castShadow><boxGeometry args={[0.42, 0.45, 0.28]} /><meshLambertMaterial color="#FF8C00" /></mesh>
+   652→      {/* vest stripes */}
+   653→      <mesh position={[0, 0.80, 0.145]}><boxGeometry args={[0.40, 0.04, 0.01]} /><meshBasicMaterial color="#FFB347" /></mesh>
+   654→      <mesh position={[0, 1.00, 0.145]}><boxGeometry args={[0.40, 0.04, 0.01]} /><meshBasicMaterial color="#FFB347" /></mesh>
+   655→      {/* head */}
+   656→      <mesh position-y={1.40} castShadow><sphereGeometry args={[0.14, 8, 6]} /><meshLambertMaterial color="#E8C8A0" /></mesh>
+   657→      {/* helmet */}
+   658→      <mesh position-y={1.52} castShadow><cylinderGeometry args={[0.16, 0.17, 0.06, 8]} /><meshLambertMaterial color="#FFD700" /></mesh>
+   659→      <mesh position={[0, 1.50, 0.10]}><boxGeometry args={[0.30, 0.03, 0.12]} /><meshLambertMaterial color="#FFD700" /></mesh>
+   660→      {/* eyes */}
+   661→      <mesh position={[-0.05, 1.42, 0.12]}><sphereGeometry args={[0.02, 6, 4]} /><meshBasicMaterial color="#111" /></mesh>
+   662→      <mesh position={[0.05, 1.42, 0.12]}><sphereGeometry args={[0.02, 6, 4]} /><meshBasicMaterial color="#111" /></mesh>
+   663→      {/* legs */}
+   664→      <mesh position={[-0.10, 0.25, 0]} castShadow><boxGeometry args={[0.14, 0.50, 0.14]} /><meshLambertMaterial color="#4A5568" /></mesh>
+   665→      <mesh position={[0.10, 0.25, 0]} castShadow><boxGeometry args={[0.14, 0.50, 0.14]} /><meshLambertMaterial color="#4A5568" /></mesh>
+   666→      {/* arms */}
+   667→      <mesh position={[-0.28, 0.85, 0]} castShadow><boxGeometry args={[0.12, 0.50, 0.12]} /><meshLambertMaterial color="#FF8C00" /></mesh>
+   668→      <mesh position={[0.28, 0.85, 0]} castShadow><boxGeometry args={[0.12, 0.50, 0.12]} /><meshLambertMaterial color="#FF8C00" /></mesh>
+   669→      {/* boots */}
+   670→      <mesh position={[-0.10, 0.04, 0.02]}><boxGeometry args={[0.15, 0.08, 0.20]} /><meshLambertMaterial color="#333" /></mesh>
+   671→      <mesh position={[0.10, 0.04, 0.02]}><boxGeometry args={[0.15, 0.08, 0.20]} /><meshLambertMaterial color="#333" /></mesh>
+   672→    </group>
+   673→  )
+   674→}
+   675→
+   676→/* ── Low-Poly Tree ────────────────────────────── */
+   677→function LowPolyTree({ pos, scale = 1 }: { pos: [number, number, number]; scale?: number }) {
+   678→  return (
+   679→    <group position={pos} scale={scale}>
+   680→      <mesh position-y={0.6} castShadow><cylinderGeometry args={[0.08, 0.12, 1.2, 5]} /><meshLambertMaterial color="#6B4226" /></mesh>
+   681→      <mesh position-y={1.5} castShadow><coneGeometry args={[0.6, 1.0, 6]} /><meshLambertMaterial color="#3D7A2A" /></mesh>
+   682→      <mesh position-y={2.1} castShadow><coneGeometry args={[0.45, 0.8, 6]} /><meshLambertMaterial color="#4A8C35" /></mesh>
+   683→      <mesh position-y={2.5} castShadow><coneGeometry args={[0.28, 0.55, 6]} /><meshLambertMaterial color="#5A9C45" /></mesh>
+   684→    </group>
+   685→  )
+   686→}
+   687→
+   688→/* ── Path Marker ──────────────────────────────── */
+   689→function PathMarker({ pos }: { pos: [number, number, number] }) {
+   690→  return (
+   691→    <group position={pos}>
+   692→      <mesh position-y={0.35} castShadow><boxGeometry args={[0.12, 0.7, 0.12]} /><meshLambertMaterial color="#8A8478" /></mesh>
+   693→      <mesh position-y={0.72}><boxGeometry args={[0.2, 0.06, 0.06]} /><meshLambertMaterial color="#9A9488" /></mesh>
+   694→    </group>
+   695→  )
+   696→}
+   697→
+   698→/* ── Wind Particles ───────────────────────────── */
+   699→function WindParticles() {
+   700→  const ref = useRef<THREE.InstancedMesh>(null!)
+   701→  const COUNT = 120
+   702→  const dummy = useMemo(() => new THREE.Object3D(), [])
+   703→  const dataRef = useRef(
+   704→    Array.from({ length: COUNT }, () => ({
+   705→      x: (Math.random() - 0.5) * 300,
+   706→      y: Math.random() * 4 + 0.3,
+   707→      z: (Math.random() - 0.5) * 300,
+   708→      speed: 0.3 + Math.random() * 1.4,
+   709→      drift: (Math.random() - 0.5) * 0.15,
+   710→      size: 0.015 + Math.random() * 0.055,
+   711→      phase: Math.random() * Math.PI * 2,
+   712→    })),
+   713→  )
+   714→
+   715→  useFrame((_, dt) => {
+   716→    const data = dataRef.current
+   717→    for (let i = 0; i < COUNT; i++) {
+   718→      const p = data[i]
+   719→      p.x += p.speed * dt
+   720→      p.y += Math.sin(p.x * 0.04 + p.phase) * 0.002 + p.drift * dt
+   721→      if (p.x > 150) p.x = -150
+   722→      if (p.y < 0.2) p.y = 4.5
+   723→      if (p.y > 5) p.y = 0.3
+   724→      dummy.position.set(p.x, p.y, p.z)
+   725→      dummy.scale.setScalar(p.size)
+   726→      dummy.updateMatrix()
+   727→      ref.current.setMatrixAt(i, dummy.matrix)
+   728→    }
+   729→    ref.current.instanceMatrix.needsUpdate = true
+   730→  })
+   731→
+   732→  return (
+   733→    <instancedMesh ref={ref} args={[undefined, undefined, COUNT]}>
+   734→      <boxGeometry args={[1, 1, 1]} />
+   735→      <meshBasicMaterial color="#FFF8E0" transparent opacity={0.3} />
+   736→    </instancedMesh>
+   737→  )
+   738→}
+   739→
+   740→/* ── Cordula's floating Z's ────────────────────── */
+   741→function CordulaZParticles() {
+   742→  const ref = useRef<THREE.InstancedMesh>(null!)
+   743→  const COUNT = 8
+   744→  const dummy = useMemo(() => new THREE.Object3D(), [])
+   745→  const dataRef = useRef(
+   746→    Array.from({ length: COUNT }, (_, i) => ({
+   747→      offset: i * (Math.PI * 2 / COUNT),
+   748→      speed: 0.4 + Math.random() * 0.3,
+   749→    })),
+   750→  )
+   751→
+   752→  useFrame(({ clock }) => {
+   753→    const time = clock.getElapsedTime()
+   754→    const data = dataRef.current
+   755→    for (let i = 0; i < COUNT; i++) {
+   756→      const p = data[i]
+   757→      const age = ((time * p.speed + p.offset) % 3) / 3
+   758→      const x = Math.sin(p.offset * 3) * 0.3
+   759→      const y = 1.1 + age * 1.5
+   760→      const z = 0.3 + Math.cos(p.offset * 2) * 0.2
+   761→      const scale = 0.08 + Math.sin(age * Math.PI) * 0.06
+   762→      dummy.position.set(x, y, z)
+   763→      dummy.scale.set(scale, scale * 1.4, 0.02)
+   764→      dummy.rotation.set(0, 0, 0)
+   765→      dummy.updateMatrix()
+   766→      ref.current.setMatrixAt(i, dummy.matrix)
+   767→    }
+   768→    ref.current.instanceMatrix.needsUpdate = true
+   769→  })
+   770→
+   771→  return (
+   772→    <instancedMesh ref={ref} args={[undefined, undefined, COUNT]}>
+   773→      <boxGeometry args={[1, 1, 1]} />
+   774→      <meshBasicMaterial color="#88AACC" transparent opacity={0.5} />
+   775→    </instancedMesh>
+   776→  )
+   777→}

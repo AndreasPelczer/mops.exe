@@ -1,0 +1,26 @@
+{
+  "code": 200,
+  "data": {
+    "description": "",
+    "external": {},
+    "html": "<html lang=\"de\"><head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>Baumops</title>\n  <style>\n    :root { color-scheme: dark; --bg:#0b0b0a; --fg:#f4efe7; --muted:#b7aa9b; --accent:#ff7a1a; --line:#2a2520; }\n    * { box-sizing: border-box; }\n    body { margin:0; min-height:100vh; background: radial-gradient(circle at 38% 0%, #24160c 0%, var(--bg) 44%); color:var(--fg); font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif; }\n    main { width:min(1120px, calc(100vw - 40px)); min-height:100vh; margin:0 auto; display:grid; grid-template-columns:minmax(0, 1fr) minmax(280px, 420px); gap:44px; align-items:center; padding:56px 0; }\n    .mark { color:var(--accent); font-weight:900; font-size:clamp(54px, 11vw, 112px); letter-spacing:0; line-height:.9; }\n    h1 { margin:22px 0 12px; font-size:clamp(38px, 7vw, 78px); line-height:1; letter-spacing:0; }\n    p { margin:0; max-width:680px; color:var(--muted); font-size:clamp(18px, 2.2vw, 24px); line-height:1.45; }\n    .status { margin-top:34px; display:flex; gap:12px; flex-wrap:wrap; align-items:center; color:#d8cec2; font-size:15px; }\n    .pill { border:1px solid var(--line); border-radius:999px; padding:10px 14px; background:rgba(255,255,255,.035); }\n    .dot { display:inline-block; width:9px; height:9px; border-radius:50%; background:#38d66b; margin-right:8px; box-shadow:0 0 18px rgba(56,214,107,.7); }\n    .poster-wrap { justify-self:end; width:100%; max-width:420px; }\n    .poster { display:block; width:100%; height:auto; border-radius:8px; border:1px solid rgba(255,122,26,.34); box-shadow:0 28px 90px rgba(0,0,0,.55), 0 0 42px rgba(255,122,26,.12); background:#111; }\n    footer { margin-top:72px; color:#7f7366; font-size:13px; }\n    a { color:var(--accent); text-decoration:none; }\n    @media (max-width:860px) {\n      main { grid-template-columns:1fr; gap:30px; align-items:start; padding:34px 0 44px; }\n      .poster-wrap { justify-self:start; max-width:360px; }\n      footer { margin-top:42px; }\n    }\n  </style>\n</head>\n<body>\n  <main>\n    <section>\n      <div class=\"mark\">^</div>\n      <h1>Baumops ist da.</h1>\n      <p>Lokale Baustellenintelligenz fuer Nachweise, Lieferketten und Arbeit, die nicht mehr jeden Morgen neu zusammengeflickt werden muss.</p>\n      <div class=\"status\">\n        <span class=\"pill\"><span class=\"dot\"></span>Mops-Box verbunden</span>\n        <span class=\"pill\">mops.baumops.com</span>\n        <span class=\"pill\">iMOPS Construction Grid</span>\n      </div>\n      <footer>Bin da. 2026</footer>\n    </section>\n    <aside class=\"poster-wrap\" aria-label=\"Baumops Poster: Die 5 Regeln, damit die Baustelle laeuft\">\n      <img class=\"poster\" src=\"/admin-ui/assets/baumops_5_regeln_poster.png\" alt=\"Baumops Poster: Die 5 Regeln, damit die Baustelle laeuft\">\n    </aside>\n  </main>\n<script defer=\"\" src=\"https://static.cloudflareinsights.com/beacon.min.js/v833ccba57c9e4d2798f2e76cebdd09a11778172276447\" integrity=\"sha512-57MDmcccJXYtNnH+ZiBwzC4jb2rvgVCEokYN+L/nLlmO8rfYT/gIpW2A569iJ/3b+0UEasghjuZH/ma3wIs/EQ==\" data-cf-beacon=\"{&quot;version&quot;:&quot;2024.11.0&quot;,&quot;token&quot;:&quot;86584cdf6ec64603a47ef4d21def0898&quot;,&quot;r&quot;:1,&quot;server_timing&quot;:{&quot;name&quot;:{&quot;cfCacheStatus&quot;:true,&quot;cfEdge&quot;:true,&quot;cfExtPri&quot;:true,&quot;cfL4&quot;:true,&quot;cfOrigin&quot;:true,&quot;cfSpeedBrain&quot;:true},&quot;location_startswith&quot;:null}}\" crossorigin=\"anonymous\"></script>\n\n\n</body></html>",
+    "httpStatus": 200,
+    "httpStatusText": "OK",
+    "metadata": {
+      "lang": "de",
+      "viewport": "width=device-width, initial-scale=1"
+    },
+    "publishedTime": "Wed, 24 Jun 2026 11:27:48 GMT",
+    "title": "Baumops",
+    "url": "https://baumops.com/",
+    "usage": {
+      "tokens": 1230
+    }
+  },
+  "meta": {
+    "usage": {
+      "tokens": 1230
+    }
+  },
+  "status": 20000
+}
