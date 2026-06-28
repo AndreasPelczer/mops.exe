@@ -4,7 +4,7 @@ Kleiner 3D-Prototyp aus dem Mopsiversum.
 
 Du spielst den Baumops: vom Bauwagen zur Baustelle, Nachweise einsammeln, Checkliste vollständig machen und bei Raffi abgeben.
 
-## Starten
+## Starten (Entwicklung)
 
 ```bash
 npm install
@@ -16,6 +16,19 @@ Dann im Browser öffnen:
 ```text
 http://localhost:3000
 ```
+
+## Bauen & Deployen (statisch)
+
+Das Spiel ist rein clientseitig (Three.js). `next.config.ts` nutzt `output: "export"`,
+der Build erzeugt fertige statische Dateien in `out/` — kein laufender Server nötig.
+
+```bash
+npm run build      # -> erzeugt out/
+npm run preview    # lokal testen (npx serve out)
+```
+
+Deploy-Ziel: **game.baumops.com** via Cloudflare Pages — Build-Command `npm run build`,
+Output-Verzeichnis `out`. Alternativ `out/` hinter dem Cloudflare-Tunnel statisch ausliefern.
 
 ## Steuerung
 
@@ -47,12 +60,20 @@ Aktueller Loop:
 
 ## Projektzustand
 
-Das Projekt wurde aus einem KI-generierten Workspace aufgeräumt:
+Das Projekt wurde aus einem KI-generierten Workspace (Z.ai) aufgeräumt:
 
-- Spielcode liegt direkt im Repo.
-- Unbenutzte Prisma-/DB-/Upload-/Tool-Artefakte wurden entfernt.
-- Buildfehler werden nicht mehr per `ignoreBuildErrors` versteckt.
-- Das Repo ist jetzt als Prototyp lesbar und weiterentwickelbar.
+- Spielcode liegt jetzt direkt im Repo-Root (vorher in `workspace-<uuid>/` verschachtelt).
+- Ungenutzte Artefakte entfernt: Prisma/DB, next-auth, z-ai-sdk, Upload-/Download-Screenshots,
+  Generator-Logs (`tool-results/`, `worklog.md`), Websocket-Beispiel, Caddyfile, `bun.lock`.
+- Auf statischen Export umgestellt (`output: "export"`), Build läuft sauber durch.
+- Toolchain auf npm (statt bun).
+
+Bekannte Baustellen:
+
+- `ignoreBuildErrors: true` ist noch aktiv — der Prototyp hat unterdrückte TypeScript-Fehler.
+  Die müssten als Nächstes echt aufgeräumt werden, bevor man den Flag rausnimmt.
+- Viele ungenutzte shadcn-/Radix-Abhängigkeiten sind noch drin (werden aus dem Bundle
+  getreeshaked, könnten aber noch entschlackt werden).
 
 Noch nicht produktionsreif, aber echt spielbar.
 

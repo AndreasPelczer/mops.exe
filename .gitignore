@@ -1,0 +1,18 @@
+# Dependencies
+/node_modules
+
+# Next.js build output
+/.next
+/out
+
+# Logs
+*.log
+
+# Env / Secrets
+.env*
+!.env.example
+
+# OS / Editor
+.DS_Store
+*.tsbuildinfo
+next-env.d.ts
