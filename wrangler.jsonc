@@ -1,0 +1,11 @@
+{
+  // Cloudflare Workers: liefert das statische Next-Export-Ergebnis (out/) aus.
+  // Build-Command in Cloudflare: "npm run build" -> erzeugt out/.
+  // Deploy: "npx wrangler deploy" nimmt diese Konfig.
+  "name": "mopsgame",
+  "compatibility_date": "2026-06-01",
+  "assets": {
+    "directory": "./out",
+    "not_found_handling": "404-page"
+  }
+}
