@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useEffect, useMemo } from 'react'
+import { useRef, useEffect, useMemo, useState } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import { Sky, useGLTF, useAnimations } from '@react-three/drei'
 import * as THREE from 'three'
@@ -20,7 +20,7 @@ const RAFFI_INTERACT_DIST = 5.0
 /* ── Positions ─────────────────────────────────── */
 const BAUWAGEN_POS   = new THREE.Vector3(0, 0, 0)
 const RAFFI_INTERACT = new THREE.Vector3(0, 0, 3)    // front of Bauwagen
-const PROF_POS       = new THREE.Vector3(15, 0, -10)
+const PROF_POS       = new THREE.Vector3(8, 0, 15)   // Guide am Eingang der Hofeinfahrt
 const CORDULA_POS    = new THREE.Vector3(-12, 0, 12)
 const STEIN_POS      = new THREE.Vector3(8, 0, 22)
 const SHANE_POS      = new THREE.Vector3(-130, 0, 260)
@@ -93,6 +93,8 @@ export default function GameScene({
   const velY      = useRef(0)
   const grounded  = useRef(true)
   const moveState = useRef<'idle' | 'walk' | 'run' | 'jump'>('idle') // treibt die Animation des Baumops
+  const [hofSchritt, setHofSchritt] = useState(0)   // Hofeinfahrt-Bauablauf (0..6), baut sich beim Ablaufen auf
+  const hofSchrittRef = useRef(0)
   const t         = useRef(0)
   const prevNear  = useRef<string | null>(null)
   const { camera } = useThree()
@@ -207,6 +209,16 @@ export default function GameScene({
 
     /* proximity */
     const p = pos.current
+
+    // Hofeinfahrt-Fortschritt: die nächste Station in RICHTIGER Reihenfolge ablaufen baut eine Schicht
+    if (hofSchrittRef.current < HOF_STATION_POS.length) {
+      const ziel = HOF_STATION_POS[hofSchrittRef.current]
+      if (p.distanceTo(ziel) < 2.4) {
+        hofSchrittRef.current += 1
+        setHofSchritt(hofSchrittRef.current)
+      }
+    }
+
     let near: string | null = null
     if (safetyActive && !ppeOn && p.distanceTo(PPE_POS) < HAZARD_DIST) near = 'ppe'
     else if (safetyActive && ppeOn && HAZARDS.some(h => !hazardsFound.includes(h.id) && p.distanceTo(h.pos) < HAZARD_DIST)) {
@@ -265,21 +277,11 @@ export default function GameScene({
       {/* ── Bauhütte (Bauleitung) ─────────────── */}
       <Bauhuette />
 
-      {/* ── 3D-Kits: Geräte-Ecke seitlich vom Bauwagen ── */}
-      {/* targetSize nah an nativer Größe → Einzelteile realistisch groß */}
-      <KitModel url="/models/construction_tools.glb" position={[12, 0, 10]} targetSize={13} rotation={-0.9} />
-      <KitModel url="/models/wooden_props.glb" position={[-7, 0, 6]} targetSize={5} rotation={0.4} />
-
       {/* ── Sicherheits-Rundgang (Übungsbaustelle) ── */}
       {safetyActive && <SafetyCourse ppeOn={ppeOn} found={hazardsFound} />}
 
-      {/* ── Probe-Bauplatz (Muster-Rework) ── */}
-      <BaustellePoC position={[-20, 0, 14]} />
-      <PathMarker pos={[-6, 0, 9]} />
-      <PathMarker pos={[-12, 0, 12]} />
-
-      {/* ── Hofeinfahrt (erstes Level aus der DXF) ── */}
-      <Hofeinfahrt />
+      {/* ── LEVEL 1: Der Bauhof mit der Hofeinfahrt (aufgeräumt, eingezäunt) ── */}
+      <Bauhof schritt={hofSchritt} />
 
       {/* ── Baustelle Alpha ───────────────────── */}
       <BaustelleAlpha />
@@ -390,9 +392,7 @@ export default function GameScene({
       <LowPolyTree pos={[40, 0, 100]} scale={1.1} />
       <LowPolyTree pos={[75, 0, 70]} scale={1.0} />
 
-      {/* ── Path Markers ──────────────────────── */}
-      <PathMarker pos={[3, 0, 15]} />
-      <PathMarker pos={[15, 0, 30]} />
+      {/* ── Pfad zur Baustelle Alpha (die „nächste Baustelle" in der Ferne) ── */}
       <PathMarker pos={[25, 0, 50]} />
       <PathMarker pos={[35, 0, 65]} />
       <PathMarker pos={[45, 0, 75]} />
@@ -641,7 +641,9 @@ useGLTF.preload('/models/baustelle_wall.glb')
 useGLTF.preload('/models/baustelle_rubble.glb')
 useGLTF.preload('/models/tool_haven.glb')
 useGLTF.preload('/models/tow_tractor.glb')
-useGLTF.preload('/models/bauzaun.glb')
+useGLTF.preload('/models/construction_tools.glb')
+useGLTF.preload('/models/wooden_props.glb')
+for (let n = 1; n <= 6; n++) useGLTF.preload(`/models/kenney/prototype/number-${n}.glb`)
 useGLTF.preload('/models/chars/pug.glb')
 useGLTF.preload('/models/chars/worker1.glb')
 useGLTF.preload('/models/chars/worker2.glb')
@@ -1087,6 +1089,11 @@ function Peter({ position }: { position: [number, number, number] }) {
    Arbeitsschritte aus dem iMOPS-DemoSeeder (DEMO-BAU-001) als Bauablauf-Tafel.
    Maßstab: 1 Spiel-Einheit ≈ 1 m (Mops ~1,3 m hoch). Liegt vor dem Spawn (W = hin). */
 const HOFEINFAHRT_CENTER = new THREE.Vector3(0, 0, 26)
+// Auslöse-Punkte der 6 Bauablauf-Stationen: auf dem Laufweg (Einfahrt-Mitte, leicht links),
+// damit Geradeauslaufen die Schritte 1→6 der Reihe nach auslöst. Die Schilder stehen seitlich.
+const HOF_STATION_POS = [0, 1, 2, 3, 4, 5].map(
+  (i) => new THREE.Vector3(HOFEINFAHRT_CENTER.x - 1.5, 0, HOFEINFAHRT_CENTER.z - 3.4 + i * 1.6),
+)
 
 // Bauablauf — 1:1 aus DemoSeeder.hofeinfahrtMaterialCodes, in Einbau-Reihenfolge
 const BAUABLAUF_SCHRITTE = [
@@ -1120,18 +1127,18 @@ function makePflasterTexture(): THREE.Texture {
 }
 
 function makeTafelTexture(): THREE.Texture {
-  const c = document.createElement('canvas'); c.width = 1024; c.height = 620
+  const c = document.createElement('canvas'); c.width = 1024; c.height = 700
   const g = c.getContext('2d')!
-  // vorgespiegelt zeichnen: die Tafel wird um 180° gedreht (zeigt zum Spieler) → so lesbar
-  g.translate(1024, 0); g.scale(-1, 1)
-  g.fillStyle = '#1c1c22'; g.fillRect(0, 0, 1024, 620)
+  g.fillStyle = '#1c1c22'; g.fillRect(0, 0, 1024, 700)
   g.fillStyle = '#E8842A'; g.fillRect(0, 0, 1024, 92)
   g.fillStyle = '#111'; g.font = 'bold 50px sans-serif'
   g.fillText('HOFEINFAHRT · BAUABLAUF', 30, 62)
+  g.fillStyle = '#35C759'; g.font = 'bold 28px sans-serif'
+  g.fillText('Ziel: Stationen 1 → 6 der Reihe nach ablaufen — die Einfahrt baut sich auf.', 32, 138)
   g.fillStyle = '#F2E9D8'; g.font = '30px sans-serif'
-  BAUABLAUF_SCHRITTE.forEach((s, i) => g.fillText(s, 32, 156 + i * 68))
+  BAUABLAUF_SCHRITTE.forEach((s, i) => g.fillText(s, 32, 210 + i * 68))
   g.fillStyle = '#8aa0b0'; g.font = 'italic 22px sans-serif'
-  g.fillText('Quelle: iMOPS DemoSeeder · DEMO-BAU-001', 32, 156 + 6 * 68 + 6)
+  g.fillText('Quelle: iMOPS DemoSeeder · DEMO-BAU-001', 32, 210 + 6 * 68 + 6)
   const tex = new THREE.CanvasTexture(c)
   return tex
 }
@@ -1150,7 +1157,6 @@ const LIEFER_POSITIONEN = [
 function makeLieferscheinTexture(): THREE.Texture {
   const c = document.createElement('canvas'); c.width = 900; c.height = 640
   const g = c.getContext('2d')!
-  g.translate(900, 0); g.scale(-1, 1)                        // vorgespiegelt (Tafel wird gedreht)
   g.fillStyle = '#F5F1E6'; g.fillRect(0, 0, 900, 640)        // Papier
   g.fillStyle = '#2C6E49'; g.fillRect(0, 0, 900, 84)         // grüner Kopf
   g.fillStyle = '#fff'; g.font = 'bold 46px sans-serif'
@@ -1170,32 +1176,209 @@ function makeLieferscheinTexture(): THREE.Texture {
   return new THREE.CanvasTexture(c)
 }
 
-function Hofeinfahrt() {
+/* ── Beschriftung als Canvas-Textur (Schilder, Stationen) ──
+   Wird NUR im Client (useMemo) erzeugt — document gibt es beim SSR-Prerender nicht. */
+function makeSchildTexture(header: string, titel: string, unter: string, norm: string): THREE.Texture {
+  const c = document.createElement('canvas'); c.width = 512; c.height = 300
+  const g = c.getContext('2d')!
+  g.fillStyle = '#F5EFDF'; g.fillRect(0, 0, 512, 300)
+  g.fillStyle = '#E8842A'; g.fillRect(0, 0, 512, 74)
+  g.fillStyle = '#fff'; g.font = 'bold 40px sans-serif'; g.fillText(header, 20, 52)
+  g.fillStyle = '#1c1c1c'; g.font = 'bold 42px sans-serif'; g.fillText(titel, 20, 146)
+  if (unter) { g.fillStyle = '#2C6E49'; g.font = '30px monospace'; g.fillText(unter, 20, 204) }
+  if (norm) { g.fillStyle = '#6b6b6b'; g.font = 'italic 26px sans-serif'; g.fillText(norm, 20, 250) }
+  g.strokeStyle = '#c9b98a'; g.lineWidth = 6; g.strokeRect(3, 3, 506, 294)
+  return new THREE.CanvasTexture(c)
+}
+
+// Wire-Mesh-Textur für den Bauzaun (transparent, gekachelt)
+function makeZaunTexture(): THREE.Texture {
+  const c = document.createElement('canvas'); c.width = c.height = 128
+  const g = c.getContext('2d')!
+  g.clearRect(0, 0, 128, 128)
+  g.strokeStyle = 'rgba(205,205,210,0.85)'; g.lineWidth = 2
+  for (let i = -128; i < 128; i += 15) {
+    g.beginPath(); g.moveTo(i, 0); g.lineTo(i + 128, 128); g.stroke()
+    g.beginPath(); g.moveTo(i + 128, 0); g.lineTo(i, 128); g.stroke()
+  }
+  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(3, 2); return t
+}
+
+// Ein Bauzaun-Element (Füße + Pfosten + Gitter) — billig aus Primitiven, beliebig kachelbar
+function ZaunPanel({ position, rotation = 0, tex, w = 3.4, h = 2.0 }: {
+  position: [number, number, number]; rotation?: number; tex: THREE.Texture; w?: number; h?: number
+}) {
+  return (
+    <group position={position} rotation-y={rotation}>
+      <mesh position={[-w / 2 + 0.1, 0.08, 0]} castShadow><boxGeometry args={[0.5, 0.16, 0.28]} /><meshLambertMaterial color="#c25a2a" /></mesh>
+      <mesh position={[w / 2 - 0.1, 0.08, 0]} castShadow><boxGeometry args={[0.5, 0.16, 0.28]} /><meshLambertMaterial color="#c25a2a" /></mesh>
+      <mesh position={[-w / 2 + 0.1, h / 2, 0]}><cylinderGeometry args={[0.035, 0.035, h, 6]} /><meshLambertMaterial color="#cfcfcf" /></mesh>
+      <mesh position={[w / 2 - 0.1, h / 2, 0]}><cylinderGeometry args={[0.035, 0.035, h, 6]} /><meshLambertMaterial color="#cfcfcf" /></mesh>
+      <mesh position={[0, h - 0.12, 0]}><boxGeometry args={[w - 0.2, 0.05, 0.05]} /><meshLambertMaterial color="#cfcfcf" /></mesh>
+      <mesh position={[0, 0.28, 0]}><boxGeometry args={[w - 0.2, 0.05, 0.05]} /><meshLambertMaterial color="#cfcfcf" /></mesh>
+      <mesh position={[0, h / 2 + 0.05, 0]}>
+        <planeGeometry args={[w - 0.25, h - 0.45]} />
+        <meshBasicMaterial map={tex} transparent alphaTest={0.1} opacity={0.9} side={THREE.DoubleSide} />
+      </mesh>
+    </group>
+  )
+}
+function ZaunReihe({ start, count, dir, step = 3.4, tex }: {
+  start: [number, number]; count: number; dir: 'x' | 'z'; step?: number; tex: THREE.Texture
+}) {
+  return <>{Array.from({ length: count }).map((_, i) => (
+    <ZaunPanel key={i} tex={tex}
+      position={dir === 'x' ? [start[0] + i * step, 0, start[1]] : [start[0], 0, start[1] + i * step]}
+      rotation={dir === 'x' ? 0 : Math.PI / 2} />
+  ))}</>
+}
+
+// Die 6 Bauablauf-Schritte (aus DemoSeeder) als Stationen entlang der Einfahrt
+const BAUABLAUF_STATIONEN = [
+  { nr: 1, titel: 'Trennvlies', material: 'VLI-GEO', norm: '', farbe: '#5c6b4f' },
+  { nr: 2, titel: 'Schotter 0/32', material: 'SCH-032', norm: 'DIN 18315', farbe: '#8a8a86' },
+  { nr: 3, titel: 'Randsteine', material: 'RND-TB+C16', norm: 'DIN 18318', farbe: '#b9b3a7' },
+  { nr: 4, titel: 'Splittbettung', material: 'SPL-208', norm: '', farbe: '#c9c6bd' },
+  { nr: 5, titel: 'Pflaster', material: 'PFL-VBS', norm: 'DIN 18318', farbe: '#6f6f73' },
+  { nr: 6, titel: 'Fugen', material: 'FUG-02', norm: '', farbe: '#cbb58a' },
+]
+type Station = typeof BAUABLAUF_STATIONEN[number]
+
+function BauablaufStation({ station, position, done = false }: { station: Station; position: [number, number, number]; done?: boolean }) {
+  const tex = useMemo(() => makeSchildTexture(`Schritt ${station.nr}`, station.titel, station.material, station.norm), [station])
+  return (
+    <group position={position} rotation-y={Math.PI / 2}>
+      {/* Materialhaufen als Muster (Farbe = Schicht) */}
+      <mesh position={[0, 0.18, 0.9]} castShadow><boxGeometry args={[0.9, 0.36, 0.7]} /><meshLambertMaterial color={station.farbe} /></mesh>
+      {/* 3D-Nummer aus dem Kenney-Kit */}
+      <KitModel url={`${K}/prototype/number-${station.nr}.glb`} position={[0, 0, -0.9]} targetSize={1.1} />
+      {/* Schild auf Pfosten */}
+      <mesh position={[0, 0.75, 0]}><cylinderGeometry args={[0.04, 0.04, 1.5, 8]} /><meshLambertMaterial color="#777" /></mesh>
+      <mesh position={[0, 1.5, 0.03]}><planeGeometry args={[1.5, 0.88]} /><meshBasicMaterial map={tex} toneMapped={false} side={THREE.DoubleSide} /></mesh>
+      {/* erledigt: grüne Kugel als Haken über dem Schild */}
+      {done && (
+        <mesh position={[0.62, 1.95, 0.05]}>
+          <sphereGeometry args={[0.16, 12, 10]} /><meshBasicMaterial color="#35C759" toneMapped={false} />
+        </mesh>
+      )}
+    </group>
+  )
+}
+
+// Materiallager / Fundus: die Sets ordentlich auf einem Kies-Pad, RICHTIG skaliert
+function Materiallager({ position }: { position: [number, number, number] }) {
+  const schild = useMemo(() => makeSchildTexture('Bauhof', 'Materiallager', 'Fundus', ''), [])
+  return (
+    <group position={position}>
+      <mesh rotation-x={-Math.PI / 2} position-y={0.006} receiveShadow><planeGeometry args={[14, 12]} /><meshLambertMaterial color="#a89a7c" /></mesh>
+      <KitModel url="/models/tool_haven.glb"        position={[3.5, 0, -3]} targetSize={5}   rotation={-0.4} />
+      <KitModel url="/models/construction_tools.glb" position={[-3, 0, -2]} targetSize={2.4} rotation={0.3} />
+      <KitModel url="/models/wooden_props.glb"       position={[-4, 0, 2]}  targetSize={2.4} rotation={-0.2} />
+      <KitModel url="/models/debris_kit.glb"         position={[0, 0, 3]}   targetSize={2.4} rotation={0.5} />
+      <KitModel url="/models/baustelle_rubble.glb"   position={[5, 0, 3.5]} targetSize={5}   rotation={-1.0} />
+      <Baupalette position={[-1.5, 0, -3.5]} />
+      <mesh position={[-1.5, 0.22, -3.5]} castShadow><boxGeometry args={[0.9, 0.4, 0.7]} /><meshLambertMaterial color="#8a8a86" /></mesh>
+      <Baupalette position={[-0.3, 0, -3.3]} rotation={0.2} />
+      <mesh position={[-0.3, 0.2, -3.3]} castShadow><boxGeometry args={[0.85, 0.36, 0.65]} /><meshLambertMaterial color="#c9c6bd" /></mesh>
+      <mesh position={[-6, 0.9, -5]}><cylinderGeometry args={[0.05, 0.05, 1.8, 8]} /><meshLambertMaterial color="#777" /></mesh>
+      <mesh position={[-6, 1.7, -4.97]}><planeGeometry args={[2.2, 1.3]} /><meshBasicMaterial map={schild} toneMapped={false} side={THREE.DoubleSide} /></mesh>
+    </group>
+  )
+}
+
+// Tor mit Baustellenschild (zeigt zum ankommenden Spieler)
+function Tor({ position }: { position: [number, number, number] }) {
+  const schild = useMemo(() => makeSchildTexture('Baustelle', 'Hofeinfahrt', 'DEMO-BAU-001', ''), [])
+  return (
+    <group position={position}>
+      <mesh position={[-3, 1.3, 0]} castShadow><boxGeometry args={[0.3, 2.6, 0.3]} /><meshLambertMaterial color="#c25a2a" /></mesh>
+      <mesh position={[3, 1.3, 0]} castShadow><boxGeometry args={[0.3, 2.6, 0.3]} /><meshLambertMaterial color="#c25a2a" /></mesh>
+      <mesh position={[0, 2.5, 0]} castShadow><boxGeometry args={[6.3, 0.3, 0.3]} /><meshLambertMaterial color="#c25a2a" /></mesh>
+      {/* Schild seitlich am linken Pfosten, Front zeigt nach −z (zum Spieler) */}
+      <group position={[-3, 1.55, -0.25]} rotation-y={Math.PI}>
+        <mesh><planeGeometry args={[2.4, 1.45]} /><meshBasicMaterial map={schild} toneMapped={false} side={THREE.DoubleSide} /></mesh>
+      </group>
+    </group>
+  )
+}
+
+// LEVEL 1: der ganze Bauhof — Kies-Boden, das Level (Hofeinfahrt), Fundus, Umzäunung mit Tor
+function Bauhof({ schritt }: { schritt: number }) {
+  const zaunTex = useMemo(makeZaunTexture, [])
+  return (
+    <group>
+      {/* Kies-Boden des Bauhofs (hebt den Platz vom Grün ab) */}
+      <mesh rotation-x={-Math.PI / 2} position={[0, 0.004, 24]} receiveShadow>
+        <planeGeometry args={[42, 34]} /><meshLambertMaterial color="#9d9074" />
+      </mesh>
+      {/* das eigentliche Level */}
+      <Hofeinfahrt schritt={schritt} />
+      {/* Fundus rechts */}
+      <Materiallager position={[13, 0, 15]} />
+      {/* Umzäunung: Tor vorne (Einfahrt), Zaun ringsum */}
+      <Tor position={[0, 0, 8]} />
+      <ZaunReihe tex={zaunTex} start={[-19, 8]}  count={5}  dir="x" />
+      <ZaunReihe tex={zaunTex} start={[4, 8]}    count={5}  dir="x" />
+      <ZaunReihe tex={zaunTex} start={[-19, 40]} count={12} dir="x" />
+      <ZaunReihe tex={zaunTex} start={[-20, 10]} count={9}  dir="z" />
+      <ZaunReihe tex={zaunTex} start={[20, 10]}  count={9}  dir="z" />
+    </group>
+  )
+}
+
+function Hofeinfahrt({ schritt }: { schritt: number }) {
   const pflaster = useMemo(makePflasterTexture, [])
   const tafel = useMemo(makeTafelTexture, [])
   const lieferschein = useMemo(makeLieferscheinTexture, [])
   const S = 10, half = S / 2, b = 0.25
   return (
     <group position={[HOFEINFAHRT_CENTER.x, 0, HOFEINFAHRT_CENTER.z]}>
-      {/* Planum-Rand (sandig, etwas größer) */}
+      {/* Planum (Sand) — Ausgangszustand, immer da */}
       <mesh rotation-x={-Math.PI / 2} position-y={0.01} receiveShadow>
         <planeGeometry args={[S + 1.4, S + 1.4]} /><meshLambertMaterial color="#b9a06a" />
       </mesh>
-      {/* Pflasterfläche */}
-      <mesh rotation-x={-Math.PI / 2} position-y={0.02} receiveShadow>
-        <planeGeometry args={[S, S]} /><meshLambertMaterial map={pflaster} />
-      </mesh>
-      {/* Leistensteine (Einfassung) */}
-      {[half, -half].map((z, i) => (
+      {/* Der Aufbau entsteht Schicht für Schicht, wenn die Stationen in Reihenfolge abgelaufen werden */}
+      {/* 1 Trennvlies */}
+      {schritt >= 1 && (
+        <mesh rotation-x={-Math.PI / 2} position-y={0.012} receiveShadow>
+          <planeGeometry args={[S + 0.6, S + 0.6]} /><meshLambertMaterial color="#5c6b4f" />
+        </mesh>
+      )}
+      {/* 2 Schotter 0/32 */}
+      {schritt >= 2 && (
+        <mesh rotation-x={-Math.PI / 2} position-y={0.014} receiveShadow>
+          <planeGeometry args={[S, S]} /><meshLambertMaterial color="#8a8a86" />
+        </mesh>
+      )}
+      {/* 3 Leistensteine (Einfassung) */}
+      {schritt >= 3 && [half, -half].map((z, i) => (
         <mesh key={'h' + i} position={[0, 0.06, z]} castShadow receiveShadow>
           <boxGeometry args={[S + 2 * b, 0.14, b]} /><meshLambertMaterial color="#9a9a9a" />
         </mesh>
       ))}
-      {[half, -half].map((x, i) => (
+      {schritt >= 3 && [half, -half].map((x, i) => (
         <mesh key={'v' + i} position={[x, 0.06, 0]} castShadow receiveShadow>
           <boxGeometry args={[b, 0.14, S]} /><meshLambertMaterial color="#9a9a9a" />
         </mesh>
       ))}
+      {/* 4 Splittbettung */}
+      {schritt >= 4 && (
+        <mesh rotation-x={-Math.PI / 2} position-y={0.016} receiveShadow>
+          <planeGeometry args={[S - 0.4, S - 0.4]} /><meshLambertMaterial color="#c9c6bd" />
+        </mesh>
+      )}
+      {/* 5 Verbundpflaster */}
+      {schritt >= 5 && (
+        <mesh rotation-x={-Math.PI / 2} position-y={0.02} receiveShadow>
+          <planeGeometry args={[S - 0.4, S - 0.4]} /><meshLambertMaterial map={pflaster} />
+        </mesh>
+      )}
+      {/* 6 Fugensand-Schimmer = fertig */}
+      {schritt >= 6 && (
+        <mesh rotation-x={-Math.PI / 2} position-y={0.021}>
+          <planeGeometry args={[S - 0.4, S - 0.4]} /><meshBasicMaterial color="#cbb58a" transparent opacity={0.14} />
+        </mesh>
+      )}
       {/* Bauablauf-Tafel am hinteren Rand, zeigt zum ankommenden Spieler */}
       <group position={[0, 0, half + 1.6]} rotation-y={Math.PI}>
         <mesh position={[-1.7, 1.0, 0]}><cylinderGeometry args={[0.05, 0.05, 2, 8]} /><meshLambertMaterial color="#777" /></mesh>
@@ -1221,15 +1404,13 @@ function Hofeinfahrt() {
         </group>
       </group>
 
-      {/* Bauzaun-Absperrung: Seiten + hinten, Einfahrt vorne (−z) bleibt offen */}
-      <KitModel url="/models/bauzaun.glb" position={[-2.5, 0, half + 0.9]} targetSize={5} rotation={0} />
-      <KitModel url="/models/bauzaun.glb" position={[ 2.5, 0, half + 0.9]} targetSize={5} rotation={0} />
-      <KitModel url="/models/bauzaun.glb" position={[-half - 0.9, 0, -1.5]} targetSize={5} rotation={1.57} />
-      <KitModel url="/models/bauzaun.glb" position={[-half - 0.9, 0,  3]}   targetSize={5} rotation={1.57} />
-      {/* Baustelleneinrichtung (deine Meshy-Teile) rund um die Einfahrt */}
-      <KitModel url="/models/baustelle_rubble.glb" position={[half + 2.2, 0, 4]}   targetSize={6}   rotation={-1.2} />
-      <KitModel url="/models/tool_haven.glb"       position={[half + 2.8, 0, -3]}  targetSize={5}   rotation={-1.0} />
-      <KitModel url="/models/tow_tractor.glb"      position={[2.6, 0, 1]}          targetSize={4.5} rotation={0.5} />
+      {/* Schlepper auf dem Platz (Aushub-Maschine; später der Bagger) */}
+      <KitModel url="/models/tow_tractor.glb" position={[3.0, 0, 0.5]} targetSize={4.5} rotation={0.5} />
+      {/* Bauablauf-Stationen 1..6 entlang der linken Kante (Station 1 am Eingang) */}
+      {BAUABLAUF_STATIONEN.map((s, i) => (
+        <BauablaufStation key={s.nr} station={s} done={schritt > i}
+          position={[-half - 1.3, 0, -half + 1.6 + i * 1.6]} />
+      ))}
     </group>
   )
 }
