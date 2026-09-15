@@ -16,3 +16,6 @@
 .DS_Store
 *.tsbuildinfo
 next-env.d.ts
+
+# Editor-Backups (nicht committen)
+*.backup_*

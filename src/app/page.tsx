@@ -5,6 +5,7 @@ import { Canvas } from '@react-three/fiber'
 import { Press_Start_2P } from 'next/font/google'
 import GameScene, { type ChecklistState } from '@/game/GameScene'
 import { cordulaGreet, cordulaRespond, type ChatLine } from '@/game/cordula'
+import { initAudio, playClick, playOpen, playEquip, playCorrect, playWrong, playFound, playComplete, setMuted } from '@/game/sound'
 
 const pixel = Press_Start_2P({ weight: '400', subsets: ['latin'] })
 
@@ -41,7 +42,83 @@ interface Decision {
   options: { label: string; value: string }[]
   correctValue: string
   onSuccess: () => void
+  explain?: string      // Lern-Erklärung (Sicherheits-Rundgang)
+  hazardId?: string     // markiert diese Entscheidung als Gefahr im Rundgang
 }
+
+/* ── Feedback (Erklärung nach einer Sicherheits-Antwort) ── */
+interface Feedback {
+  correct: boolean
+  title: string
+  text: string
+}
+
+/* ── Sicherheits-Rundgang: Gefahren-Katalog ────── */
+interface HazardInfo {
+  id: string
+  title: string
+  question: string
+  options: { label: string; value: string }[]
+  correctValue: string
+  explain: string
+}
+const HAZARD_INFO: HazardInfo[] = [
+  {
+    id: 'kante', title: 'ABSTURZKANTE',
+    question: 'Die Arbeitsbühne hat eine offene Kante in Höhe. Was fehlt?',
+    options: [
+      { label: 'Ein Geländer / Absturzsicherung', value: 'gelaender' },
+      { label: 'Nichts – passt so', value: 'ok' },
+      { label: 'Ein Warnschild reicht', value: 'schild' },
+    ],
+    correctValue: 'gelaender',
+    explain: 'Ab 1,00 m Absturzhöhe ist eine Absturzsicherung Pflicht – Seitenschutz mit Geländer, Zwischenholm und Bordbrett. Ein Schild allein schützt niemanden.',
+  },
+  {
+    id: 'absperrung', title: 'OFFENE GRUBE',
+    question: 'Neben dem Weg liegt eine offene Grube. Was ist nötig?',
+    options: [
+      { label: 'Absperrung + Warnung rundum', value: 'absperren' },
+      { label: 'Nur zuschütten wenn Zeit ist', value: 'egal' },
+      { label: 'Gar nichts', value: 'nichts' },
+    ],
+    correctValue: 'absperren',
+    explain: 'Gruben und Öffnungen müssen allseitig abgesperrt und gekennzeichnet werden (Bauzaun/Geländer), damit niemand hineinstürzt.',
+  },
+  {
+    id: 'schutt', title: 'STOLPERFALLE',
+    question: 'Bauschutt liegt mitten im Laufweg. Richtig ist:',
+    options: [
+      { label: 'Laufwege freihalten, Schutt entsorgen', value: 'freihalten' },
+      { label: 'Einfach drübersteigen', value: 'druebersteigen' },
+      { label: 'Liegen lassen bis Feierabend', value: 'liegen' },
+    ],
+    correctValue: 'freihalten',
+    explain: 'Verkehrs- und Fluchtwege müssen frei und sicher begehbar sein. Stolperstellen sind eine der häufigsten Unfallursachen auf dem Bau.',
+  },
+  {
+    id: 'last', title: 'UNGESICHERTE LAST',
+    question: 'Die Kisten sind hoch und schief gestapelt. Was tun?',
+    options: [
+      { label: 'Niedrig & standsicher stapeln/sichern', value: 'sichern' },
+      { label: 'Noch eine Kiste draufsetzen', value: 'mehr' },
+      { label: 'Passt schon', value: 'ok' },
+    ],
+    correctValue: 'sichern',
+    explain: 'Material standsicher lagern: nicht zu hoch, gegen Umkippen/Abrutschen gesichert, Verkehrswege frei. Herabfallende Lasten sind lebensgefährlich.',
+  },
+  {
+    id: 'fluchtweg', title: 'BLOCKIERTER FLUCHTWEG',
+    question: 'Vor der Notausgangstür stehen Kisten. Bewertung?',
+    options: [
+      { label: 'Sofort freiräumen – Fluchtweg!', value: 'freiraeumen' },
+      { label: 'Kurz stehen lassen ist ok', value: 'kurz' },
+      { label: 'Egal, gibt andere Türen', value: 'egal' },
+    ],
+    correctValue: 'freiraeumen',
+    explain: 'Flucht- und Rettungswege müssen jederzeit frei sein. Im Notfall (Brand, Einsturz) entscheiden Sekunden – zugestellte Ausgänge kosten Leben.',
+  },
+]
 
 const EMPTY_CHECKLIST: ChecklistState = {
   zustand: false, nachweis: false, lieferung: false, uebergabe: false, aufmass: false,
@@ -76,6 +153,28 @@ export default function Home() {
 
   /* ── Decision state ─────────────────────────── */
   const [decision, setDecision] = useState<Decision | null>(null)
+  const [feedback, setFeedback] = useState<Feedback | null>(null)
+
+  /* ── Sicherheits-Rundgang state ─────────────── */
+  const [safetyActive, setSafetyActive] = useState(false)
+  const [ppeOn, setPpeOn] = useState(false)
+  const [hazardsFound, setHazardsFound] = useState<string[]>([])
+  const [safetyScore, setSafetyScore] = useState(0)
+  const [safetyDone, setSafetyDone] = useState(false)
+  const [muted, setMutedState] = useState(false)
+  const [showTouch, setShowTouch] = useState(false)
+
+  /* Touch-/kleine Bildschirme erkennen → Touch-Steuerung zeigen */
+  useEffect(() => {
+    const check = () =>
+      setShowTouch(
+        (typeof window !== 'undefined') &&
+        (window.matchMedia?.('(pointer: coarse)').matches || window.innerWidth < 768),
+      )
+    check()
+    window.addEventListener('resize', check)
+    return () => window.removeEventListener('resize', check)
+  }, [])
 
   /* ── Dialog state ───────────────────────────── */
   const [dialog, setDialog] = useState<'raffi' | 'professor' | null>(null)
@@ -108,6 +207,7 @@ export default function Home() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.code === 'Escape') {
+        if (feedback) { setFeedback(null); return }
         if (decision) { setDecision(null); return }
         setDialog(null)
         if (showTerminal) {
@@ -121,7 +221,7 @@ export default function Home() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [showTerminal, decision])
+  }, [showTerminal, decision, feedback])
 
   /* ── Interaction handler ────────────────────── */
   const handleInteract = useCallback((type: string) => {
@@ -213,6 +313,50 @@ export default function Home() {
     }
   }, [checklist, aufmassWalked, notify, addEvidence])
 
+  /* ── Sicherheits-Rundgang ──────────────────── */
+  const handleStartSafety = useCallback(() => {
+    setSafetyActive(true)
+    setPpeOn(false)
+    setHazardsFound([])
+    setSafetyScore(0)
+    setSafetyDone(false)
+    setDialog(null)
+    playOpen()
+    notify('SICHERHEITS-RUNDGANG\nZuerst PSA anlegen!', 3500)
+  }, [notify])
+
+  const handleSafetyInteract = useCallback((type: string) => {
+    if (type === 'ppe') {
+      setPpeOn(true)
+      playEquip()
+      setFeedback({
+        correct: true, title: 'PSA ANGELEGT',
+        text: 'Helm, Warnweste und Sicherheitsschuhe sind auf jeder Baustelle Pflicht. Jetzt darfst du rein – finde die 5 Gefahren und beurteile sie.',
+      })
+      notify('PSA: HELM · WESTE · SCHUHE', 2500)
+      return
+    }
+    const hz = HAZARD_INFO.find(h => h.id === type)
+    if (!hz || hazardsFound.includes(hz.id)) return
+    setDecision({
+      title: hz.title,
+      question: hz.question,
+      options: hz.options,
+      correctValue: hz.correctValue,
+      explain: hz.explain,
+      hazardId: hz.id,
+      onSuccess: () => {},
+    })
+  }, [hazardsFound, notify])
+
+  /* Abschluss, sobald alle 5 Gefahren beurteilt sind */
+  useEffect(() => {
+    if (safetyActive && !safetyDone && hazardsFound.length === HAZARD_INFO.length) {
+      setSafetyDone(true)
+      playComplete()
+    }
+  }, [safetyActive, safetyDone, hazardsFound])
+
   /* ── Raffi dialog ──────────────────────────── */
   const handleRaffi = useCallback(() => {
     setDialog('raffi')
@@ -291,7 +435,16 @@ export default function Home() {
   const handleNear = useCallback((obj: string | null) => setNearObject(obj), [])
 
   /* ── Prompt text ───────────────────────────── */
-  const promptText = nearObject === 'raffi'
+  const HAZARD_PROMPT: Record<string, string> = {
+    hz_kante: '[E] KANTE PRÜFEN',
+    hz_absperrung: '[E] GRUBE PRÜFEN',
+    hz_schutt: '[E] LAUFWEG PRÜFEN',
+    hz_last: '[E] STAPEL PRÜFEN',
+    hz_fluchtweg: '[E] TÜR PRÜFEN',
+  }
+  const promptText = nearObject === 'ppe' ? '[E] PSA ANLEGEN'
+    : nearObject?.startsWith('hz_') ? HAZARD_PROMPT[nearObject]
+    : nearObject === 'raffi'
     ? (questStep === 0 ? '[E] MIT RAFFI SPRECHEN'
        : questStep === 1 ? '[E] CHECKLISTE ABGEBEN'
        : '[E] MIT RAFFI SPRECHEN')
@@ -304,7 +457,7 @@ export default function Home() {
     : nearObject === 'cordula' ? '[E] CORDULA WECKEN'
     : null
 
-  const anyDialogOpen = dialog !== null || showTerminal || decision !== null
+  const anyDialogOpen = dialog !== null || showTerminal || decision !== null || feedback !== null || safetyDone
 
   /* ── Raffi dialog content based on quest ──── */
   const raffiTitle = questStep === 0 ? 'NEUE AUFGABE'
@@ -324,8 +477,8 @@ export default function Home() {
       <div
         className="w-screen h-screen flex flex-col items-center justify-center select-none"
         style={{ background: '#1C2B1A' }}
-        onClick={() => setStarted(true)}
-        onKeyDown={() => setStarted(true)}
+        onClick={() => { initAudio(); playClick(); setStarted(true) }}
+        onKeyDown={() => { initAudio(); playClick(); setStarted(true) }}
         tabIndex={0}
       >
         <div className={`${pixel.className} text-center`}>
@@ -369,13 +522,58 @@ export default function Home() {
           onNearChange={handleNear}
           cordulaAwake={cordulaAwake}
           chaos={false}
+          safetyActive={safetyActive}
+          ppeOn={ppeOn}
+          hazardsFound={hazardsFound}
+          onSafetyInteract={handleSafetyInteract}
         />
       </Canvas>
 
+      {/* ── Ton an/aus ─────────────────────────── */}
+      <button
+        onClick={() => { const m = !muted; setMuted(m); setMutedState(m); if (!m) playClick() }}
+        className={`${pixel.className} absolute top-3 right-4 z-30 text-[8px] text-amber-300/50 hover:text-amber-300 cursor-pointer`}
+        style={{ background: 'rgba(10,16,10,0.8)', border: '1px solid rgba(255,180,0,0.15)', padding: '6px 9px', borderRadius: '4px' }}
+        title="Ton an/aus"
+      >
+        {muted ? '🔇' : '🔊'}
+      </button>
+
+      {/* ── Vignette (cinematischer Rand) ──────── */}
+      <div
+        className="absolute inset-0 pointer-events-none z-10"
+        style={{ background: 'radial-gradient(120% 100% at 50% 42%, rgba(0,0,0,0) 55%, rgba(0,0,0,0.28) 88%, rgba(0,0,0,0.5) 100%)' }}
+      />
+
+      {/* ── Touch-Steuerung (Handy) ────────────── */}
+      {showTouch && !anyDialogOpen && <MobileControls pixelClass={pixel.className} />}
+
       {/* ── Crosshair ──────────────────────────── */}
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none z-10">
         <div className="w-1.5 h-1.5 rounded-full bg-white/20" />
       </div>
+
+      {/* ═══ SAFETY HUD (top-center) ════════════ */}
+      {safetyActive && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 pointer-events-none z-20">
+          <div className={`${pixel.className} text-center`} style={{
+            background: 'rgba(10,16,10,0.85)',
+            border: '1px solid rgba(66,165,245,0.35)',
+            padding: '8px 16px', borderRadius: '4px',
+          }}>
+            <p className="text-[8px] text-cyan-300/70 mb-1.5">SICHERHEITS-RUNDGANG</p>
+            <div className="flex items-center justify-center gap-3">
+              <span className={`text-[8px] ${ppeOn ? 'text-green-400' : 'text-red-400 animate-pulse'}`}>
+                {ppeOn ? '✓ PSA' : '⚠ PSA'}
+              </span>
+              <span className="text-[8px] text-amber-200/60">
+                GEFAHREN {hazardsFound.length}/{HAZARD_INFO.length}
+              </span>
+              <span className="text-[8px] text-green-300/70">{safetyScore} ★</span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ═══ MISSION PANEL (top-left) ═══════════ */}
       <div className="absolute top-3 left-4 pointer-events-none z-20">
@@ -534,7 +732,20 @@ export default function Home() {
                 <button
                   key={opt.value}
                   onClick={() => {
-                    if (opt.value === decision.correctValue) {
+                    const correct = opt.value === decision.correctValue
+                    if (decision.hazardId) {
+                      // Sicherheits-Rundgang: Gefahr beurteilt \u2192 Erkl\u00e4rung zeigen
+                      const id = decision.hazardId
+                      setDecision(null)
+                      setHazardsFound(prev => prev.includes(id) ? prev : [...prev, id])
+                      if (correct) { setSafetyScore(s => s + 1); playCorrect(); playFound() }
+                      else playWrong()
+                      setFeedback({
+                        correct,
+                        title: correct ? '\u2713 RICHTIG' : '\u2717 LEIDER FALSCH',
+                        text: decision.explain ?? '',
+                      })
+                    } else if (correct) {
                       setDecision(null)
                       decision.onSuccess()
                     } else {
@@ -558,6 +769,67 @@ export default function Home() {
               style={{ background: 'none', border: 'none' }}
             >
               [ABBRUCH]
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ FEEDBACK (Sicherheits-Erklärung) ══════ */}
+      {feedback && (
+        <div className="absolute inset-0 flex items-center justify-center z-40" style={{ background: 'rgba(0,0,0,0.6)' }}>
+          <div
+            className={`${pixel.className} p-5 md:p-6`}
+            style={{
+              background: 'rgba(14,16,12,0.98)',
+              border: `2px solid ${feedback.correct ? 'rgba(76,175,80,0.55)' : 'rgba(255,80,60,0.5)'}`,
+              minWidth: '300px', maxWidth: '440px',
+              boxShadow: '0 4px 40px rgba(0,0,0,0.7)',
+            }}
+          >
+            <p className={`text-[11px] md:text-sm mb-3 ${feedback.correct ? 'text-green-400' : 'text-red-400'}`}>
+              {feedback.title}
+            </p>
+            <p className="text-amber-100/80 text-[8px] md:text-[10px] mb-5 leading-relaxed">
+              {feedback.text}
+            </p>
+            <button
+              onClick={() => { playClick(); setFeedback(null) }}
+              className={`${pixel.className} text-[8px] md:text-[9px] text-amber-100/80 px-4 py-2.5 cursor-pointer hover:bg-white/5 transition-colors`}
+              style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)' }}
+            >
+              WEITER →
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ ABSCHLUSS Sicherheits-Rundgang ════════ */}
+      {safetyDone && (
+        <div className="absolute inset-0 flex items-center justify-center z-40" style={{ background: 'rgba(0,0,0,0.7)' }}>
+          <div
+            className={`${pixel.className} p-6 md:p-8 text-center`}
+            style={{
+              background: 'rgba(14,18,12,0.98)',
+              border: '2px solid rgba(255,180,0,0.4)',
+              minWidth: '300px', maxWidth: '420px',
+              boxShadow: '0 4px 50px rgba(0,0,0,0.7)',
+            }}
+          >
+            <p className="text-amber-400 text-sm md:text-lg mb-2">BAUSTELLE SICHER</p>
+            <p className="text-amber-100/60 text-[8px] md:text-[10px] mb-4">Sicherheits-Rundgang abgeschlossen</p>
+            <p className="text-green-400 text-2xl md:text-3xl mb-1">{safetyScore} / {HAZARD_INFO.length}</p>
+            <p className="text-amber-200/40 text-[7px] md:text-[9px] mb-6">Gefahren richtig beurteilt</p>
+            <p className="text-amber-100/70 text-[8px] md:text-[9px] mb-6 leading-relaxed">
+              {safetyScore === HAZARD_INFO.length
+                ? 'Perfekt! Du hast alle Regeln erkannt. So sieht ein sicherer Bauleiter aus.'
+                : 'Gut gemacht! Schau dir die verpassten Regeln nochmal an und probier es erneut.'}
+            </p>
+            <button
+              onClick={() => { setSafetyDone(false); setSafetyActive(false); setVertrauen(v => v + safetyScore) }}
+              className={`${pixel.className} text-[9px] text-amber-100/80 px-5 py-3 cursor-pointer hover:bg-white/5 transition-colors`}
+              style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,180,0,0.3)' }}
+            >
+              FERTIG →
             </button>
           </div>
         </div>
@@ -622,6 +894,16 @@ export default function Home() {
                   [SCHLIESSEN]
                 </button>
               </>
+            )}
+
+            {/* Sicherheits-Rundgang – immer verfügbar */}
+            {!safetyActive && (
+              <div style={{ borderTop: '1px solid rgba(255,180,0,0.15)', marginTop: '12px', paddingTop: '10px' }}>
+                <p className="text-amber-200/40 text-[7px] mb-2">&ldquo;Und bevor du loslegst &ndash; mach den Sicherheits-Rundgang. Pflicht.&rdquo;</p>
+                <button onClick={handleStartSafety} className={dialogBtnStyle(pixel.className)}>
+                  [SICHERHEITS-RUNDGANG]
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -736,12 +1018,14 @@ export default function Home() {
         </div>
       )}
 
-      {/* ── Controls Hint ──────────────────────── */}
-      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 pointer-events-none">
-        <p className={`${pixel.className} text-[7px] md:text-[8px] text-white/20 text-center`}>
-          WASD &mdash; LAUFEN &nbsp;&nbsp; LEERTASTE &mdash; SPRINGEN &nbsp;&nbsp; E &mdash; INTERAGIEREN &nbsp;&nbsp; F &mdash; FOTO &nbsp;&nbsp; ESC &mdash; SCHLIESSEN
-        </p>
-      </div>
+      {/* ── Controls Hint (nur Desktop/Tastatur) ── */}
+      {!showTouch && (
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 pointer-events-none">
+          <p className={`${pixel.className} text-[7px] md:text-[8px] text-white/20 text-center`}>
+            WASD &mdash; LAUFEN &nbsp;&nbsp; LEERTASTE &mdash; SPRINGEN &nbsp;&nbsp; E &mdash; INTERAGIEREN &nbsp;&nbsp; F &mdash; FOTO &nbsp;&nbsp; ESC &mdash; SCHLIESSEN
+          </p>
+        </div>
+      )}
     </div>
   )
 }
@@ -762,4 +1046,56 @@ function dialogBtnStyle(fontClass: string): React.CSSProperties {
     cursor: 'pointer',
     fontFamily: 'inherit',
   }
+}
+
+/* ── Mobile Touch-Steuerung ─────────────────────── */
+/* Feuert dieselben window-KeyboardEvents wie die Tastatur → keine Änderung
+   an der Spiel-Logik nötig. Halten = Bewegung, Tippen = Aktion. */
+function MobileControls({ pixelClass }: { pixelClass: string }) {
+  const kd = (code: string) => window.dispatchEvent(new KeyboardEvent('keydown', { code, bubbles: true }))
+  const ku = (code: string) => window.dispatchEvent(new KeyboardEvent('keyup', { code, bubbles: true }))
+
+  const hold = (code: string) => ({
+    onPointerDown: (e: React.PointerEvent) => { e.preventDefault(); kd(code) },
+    onPointerUp: (e: React.PointerEvent) => { e.preventDefault(); ku(code) },
+    onPointerLeave: () => ku(code),
+    onPointerCancel: () => ku(code),
+  })
+  const tap = (code: string) => ({
+    onPointerDown: (e: React.PointerEvent) => { e.preventDefault(); kd(code); setTimeout(() => ku(code), 90) },
+  })
+
+  const base: React.CSSProperties = {
+    background: 'rgba(10,16,10,0.55)',
+    border: '1px solid rgba(255,180,0,0.25)',
+    color: 'rgba(255,220,150,0.9)',
+    borderRadius: '10px',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    userSelect: 'none', touchAction: 'none',
+    width: '56px', height: '56px', fontSize: '18px',
+  }
+
+  return (
+    <div className={`${pixelClass} absolute inset-x-0 bottom-0 z-30 pointer-events-none`} style={{ padding: '0 16px 20px' }}>
+      <div className="flex items-end justify-between">
+        {/* Steuerkreuz */}
+        <div className="pointer-events-auto" style={{ display: 'grid', gridTemplateColumns: 'repeat(3,56px)', gridAutoRows: '56px', gap: '6px' }}>
+          <span />
+          <button style={base} {...hold('KeyW')}>▲</button>
+          <span />
+          <button style={base} {...hold('KeyA')}>◀</button>
+          <button style={base} {...hold('KeyS')}>▼</button>
+          <button style={base} {...hold('KeyD')}>▶</button>
+        </div>
+        {/* Aktionen */}
+        <div className="pointer-events-auto flex flex-col items-center gap-2">
+          <button style={{ ...base, width: '66px', height: '66px', fontSize: '14px', borderColor: 'rgba(255,180,0,0.5)' }} {...tap('KeyE')}>E</button>
+          <div className="flex gap-2">
+            <button style={base} {...tap('KeyF')}>📷</button>
+            <button style={{ ...base, fontSize: '10px' }} {...hold('Space')}>JUMP</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
 }
