@@ -16,6 +16,7 @@ const CAM_HEIGHT = 2.5
 const CAM_DIST = 5.5
 const INTERACT_DIST = 3.5
 const RAFFI_INTERACT_DIST = 5.0
+const MOUSE_SENS = 0.0034   // Maus-Empfindlichkeit (Pointer Lock)
 
 /* ── Positions ─────────────────────────────────── */
 const BAUWAGEN_POS   = new THREE.Vector3(0, 0, 0)
@@ -63,7 +64,19 @@ interface Props {
   ppeOn: boolean
   hazardsFound: string[]
   onSafetyInteract: (type: string) => void
+  onPickup: (id: string) => void
 }
+
+/* ── Lager-Material: 6 Kisten im Materiallager zum Aufnehmen (E) ──
+   Welt-Koordinaten (passen zum Materiallager bei 13/15). Auch in page.tsx (Hotbar) genutzt. */
+export const LAGER_ITEMS = [
+  { id: 'VLI-GEO', kurz: 'Vlies',     farbe: '#5c6b4f', pos: [9.5, 0, 11.5] as [number, number, number] },
+  { id: 'SCH-032', kurz: 'Schotter',  farbe: '#8a8a86', pos: [11.0, 0, 11.5] as [number, number, number] },
+  { id: 'SPL-208', kurz: 'Splitt',    farbe: '#c9c6bd', pos: [12.5, 0, 11.5] as [number, number, number] },
+  { id: 'PFL-VBS', kurz: 'Pflaster',  farbe: '#6f6f73', pos: [14.0, 0, 11.5] as [number, number, number] },
+  { id: 'RND-TB',  kurz: 'Randstein', farbe: '#b9b3a7', pos: [15.5, 0, 11.5] as [number, number, number] },
+  { id: 'FUG-02',  kurz: 'Fugensand', farbe: '#cbb58a', pos: [17.0, 0, 11.5] as [number, number, number] },
+] as const
 
 /* ── Sicherheits-Rundgang: Übungsbaustelle beim Bauwagen ── */
 const PPE_POS   = new THREE.Vector3(-6, 0, 12)   // PSA-Station
@@ -84,7 +97,7 @@ export default function GameScene({
   questStep, checklist, aufmassWalked,
   onInteract, onRaffiInteract, onProfessorInteract, onCordulaInteract,
   onNearChange, cordulaAwake, chaos,
-  safetyActive, ppeOn, hazardsFound, onSafetyInteract,
+  safetyActive, ppeOn, hazardsFound, onSafetyInteract, onPickup,
 }: Props) {
   const playerGrp = useRef<THREE.Group>(null!)
   const tailRef   = useRef<THREE.Mesh>(null!)
@@ -97,7 +110,31 @@ export default function GameScene({
   const hofSchrittRef = useRef(0)
   const t         = useRef(0)
   const prevNear  = useRef<string | null>(null)
-  const { camera } = useThree()
+  const pitch     = useRef(0.18)                       // Kamera-Neigung (Maus Y)
+  const viewMode  = useRef<0 | 1 | 2>(0)               // 0 Verfolger · 1 von vorne · 2 Ego
+  const [fpsView, setFpsView] = useState(false)        // blendet den Mops in der Ego-Sicht aus
+  const locked    = useRef(false)                      // Maus gefangen (Pointer Lock)?
+  const { camera, gl } = useThree()
+
+  /* ── Maus-Sicht (Pointer Lock) ─────────────── */
+  useEffect(() => {
+    const canvas = gl.domElement
+    const requestLock = () => { if (!cordulaAwake) canvas.requestPointerLock?.() }
+    const onLockChange = () => { locked.current = document.pointerLockElement === canvas }
+    const onMove = (e: MouseEvent) => {
+      if (!locked.current) return
+      yaw.current -= e.movementX * MOUSE_SENS
+      pitch.current = Math.max(-1.4, Math.min(1.5, pitch.current - e.movementY * MOUSE_SENS))  // fast ±90° wie Minecraft
+    }
+    canvas.addEventListener('click', requestLock)
+    document.addEventListener('pointerlockchange', onLockChange)
+    document.addEventListener('mousemove', onMove)
+    return () => {
+      canvas.removeEventListener('click', requestLock)
+      document.removeEventListener('pointerlockchange', onLockChange)
+      document.removeEventListener('mousemove', onMove)
+    }
+  }, [gl, cordulaAwake])
 
   /* ── Keyboard ──────────────────────────────── */
   useEffect(() => {
@@ -106,7 +143,18 @@ export default function GameScene({
       keysDown.add(e.code)
       const p = pos.current
 
+      // V: Perspektive wechseln (Verfolger → von vorne → Ego)
+      if (e.code === 'KeyV') {
+        viewMode.current = ((viewMode.current + 1) % 3) as 0 | 1 | 2
+        setFpsView(viewMode.current === 2)
+        return
+      }
+
       if (e.code === 'KeyE') {
+        // Material aus dem Lager aufnehmen
+        for (const it of LAGER_ITEMS) {
+          if (p.distanceTo(new THREE.Vector3(it.pos[0], it.pos[1], it.pos[2])) < INTERACT_DIST) { onPickup(it.id); return }
+        }
         // Raffi (always available)
         if (p.distanceTo(RAFFI_INTERACT) < RAFFI_INTERACT_DIST) { onRaffiInteract(); return }
         // Professor
@@ -147,7 +195,7 @@ export default function GameScene({
     }
   }, [questStep, checklist, aufmassWalked, cordulaAwake,
     safetyActive, ppeOn, hazardsFound,
-    onInteract, onRaffiInteract, onProfessorInteract, onCordulaInteract, onSafetyInteract])
+    onInteract, onRaffiInteract, onProfessorInteract, onCordulaInteract, onSafetyInteract, onPickup])
 
   /* ── Game Loop ─────────────────────────────── */
   useFrame((_, raw) => {
@@ -163,18 +211,24 @@ export default function GameScene({
       return
     }
 
-    /* turn */
-    if (keysDown.has('KeyA') || keysDown.has('ArrowLeft'))  yaw.current += TURN_SPEED * dt
-    if (keysDown.has('KeyD') || keysDown.has('ArrowRight')) yaw.current -= TURN_SPEED * dt
+    /* drehen (A/D) nur OHNE Maus-Fang; mit Maus wird A/D zum Seitwärtsgehen (Strafe) */
+    if (!locked.current) {
+      if (keysDown.has('KeyA') || keysDown.has('ArrowLeft'))  yaw.current += TURN_SPEED * dt
+      if (keysDown.has('KeyD') || keysDown.has('ArrowRight')) yaw.current -= TURN_SPEED * dt
+    }
 
-    /* move */
+    /* bewegen */
     const fwd = new THREE.Vector3(Math.sin(yaw.current), 0, Math.cos(yaw.current))
+    const right = new THREE.Vector3(Math.cos(yaw.current), 0, -Math.sin(yaw.current))
     const running = keysDown.has('ShiftLeft') || keysDown.has('ShiftRight')
     const speed = MOVE_SPEED * (running ? RUN_MULT : 1)
+    const strafing = locked.current && (keysDown.has('KeyA') || keysDown.has('KeyD'))
     const moving = keysDown.has('KeyW') || keysDown.has('ArrowUp') ||
-                   keysDown.has('KeyS') || keysDown.has('ArrowDown')
+                   keysDown.has('KeyS') || keysDown.has('ArrowDown') || strafing
     if (keysDown.has('KeyW') || keysDown.has('ArrowUp'))   pos.current.addScaledVector(fwd, speed * dt)
-    if (keysDown.has('KeyS') || keysDown.has('ArrowDown')) pos.current.addScaledVector(fwd, -speed * 0.5 * dt)
+    if (keysDown.has('KeyS') || keysDown.has('ArrowDown')) pos.current.addScaledVector(fwd, -speed * 0.6 * dt)
+    if (strafing && keysDown.has('KeyA')) pos.current.addScaledVector(right, speed * dt)   // links = +right (Bildschirm-links)
+    if (strafing && keysDown.has('KeyD')) pos.current.addScaledVector(right, -speed * dt)  // rechts = −right (Bildschirm-rechts)
 
     /* jump */
     if (keysDown.has('Space') && grounded.current) { velY.current = JUMP_FORCE; grounded.current = false }
@@ -196,16 +250,28 @@ export default function GameScene({
       tailRef.current.rotation.y = Math.sin(t.current * wagSpeed) * 0.6
     }
 
-    /* camera follow + chaos shake */
-    const offset = new THREE.Vector3(0, CAM_HEIGHT, -CAM_DIST)
-    offset.applyAxisAngle(UP, yaw.current)
-    const targetPos = pos.current.clone().add(offset)
-    if (chaos) {
-      targetPos.x += Math.sin(t.current * 37) * 0.15
-      targetPos.y += Math.cos(t.current * 29) * 0.1
+    /* Kamera je nach Perspektive (V schaltet um) + Maus-Neigung */
+    const head = pos.current.clone(); head.y += 1.0
+    const cp = Math.cos(pitch.current), sp = Math.sin(pitch.current)
+    if (viewMode.current === 2) {
+      // Ego — aus den Augen des Mops
+      camera.position.copy(head)
+      camera.lookAt(head.x + Math.sin(yaw.current) * cp, head.y + sp, head.z + Math.cos(yaw.current) * cp)
+    } else {
+      // Verfolger (0, hinten) oder von vorne (1)
+      const sign = viewMode.current === 1 ? 1 : -1
+      const dir = new THREE.Vector3(Math.sin(yaw.current), 0, Math.cos(yaw.current)).multiplyScalar(sign)
+      const targetPos = head.clone()
+        .addScaledVector(dir, CAM_DIST * cp)
+        .add(new THREE.Vector3(0, CAM_DIST * sp + 0.6, 0))
+      targetPos.y = Math.max(0.5, targetPos.y)   // nie unter den Boden
+      if (chaos) {
+        targetPos.x += Math.sin(t.current * 37) * 0.15
+        targetPos.y += Math.cos(t.current * 29) * 0.1
+      }
+      camera.position.lerp(targetPos, 1 - Math.pow(0.005, dt))
+      camera.lookAt(head.x, head.y - 0.2, head.z)
     }
-    camera.position.lerp(targetPos, 1 - Math.pow(0.005, dt))
-    camera.lookAt(pos.current.x, 0.3, pos.current.z)
 
     /* proximity */
     const p = pos.current
@@ -268,8 +334,8 @@ export default function GameScene({
 
       {/* ── Player (Kleiner Mops / Dog) ─────── */}
       <group ref={playerGrp}>
-        {/* Baumops-Modell (gerigt, läuft echt wenn man geht) */}
-        <AnimatedMops stateRef={moveState} targetHeight={1.3} />
+        {/* Baumops-Modell (gerigt, läuft echt wenn man geht) — in der Ego-Sicht ausgeblendet */}
+        {!fpsView && <AnimatedMops stateRef={moveState} targetHeight={1.3} />}
         {/* PSA: Bauhelm (wenn angelegt) */}
         {ppeOn && <Prop url={`${K}/prototype/hat-hard.glb`} position={[0, 0.6, 0.12]} scale={0.7} />}
       </group>
@@ -1302,6 +1368,35 @@ function Tor({ position }: { position: [number, number, number] }) {
   )
 }
 
+// kleines Schild-Textürchen für die Lager-Kisten
+function makeTagTexture(text: string): THREE.Texture {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 80
+  const g = c.getContext('2d')!
+  g.fillStyle = '#1c1c22'; g.fillRect(0, 0, 256, 80)
+  g.fillStyle = '#E8842A'; g.fillRect(0, 0, 256, 8)
+  g.fillStyle = '#F2E9D8'; g.font = 'bold 32px sans-serif'; g.textAlign = 'center'
+  g.fillText(text, 128, 52)
+  return new THREE.CanvasTexture(c)
+}
+function TagSchild({ text }: { text: string }) {
+  const tex = useMemo(() => makeTagTexture(text), [text])
+  return <mesh position={[0, 1.2, 0]}><planeGeometry args={[1.15, 0.36]} /><meshBasicMaterial map={tex} toneMapped={false} side={THREE.DoubleSide} /></mesh>
+}
+// Die 6 aufnehmbaren Material-Kisten im Lager (E = aufnehmen)
+function LagerRegal() {
+  return (
+    <>
+      {LAGER_ITEMS.map((it) => (
+        <group key={it.id} position={it.pos}>
+          <mesh position={[0, 0.35, 0]} castShadow receiveShadow><boxGeometry args={[1.0, 0.7, 0.9]} /><meshLambertMaterial color="#6b5230" /></mesh>
+          <mesh position={[0, 0.73, 0]} castShadow><boxGeometry args={[0.86, 0.14, 0.76]} /><meshLambertMaterial color={it.farbe} /></mesh>
+          <TagSchild text={`E · ${it.kurz}`} />
+        </group>
+      ))}
+    </>
+  )
+}
+
 // LEVEL 1: der ganze Bauhof — Kies-Boden, das Level (Hofeinfahrt), Fundus, Umzäunung mit Tor
 function Bauhof({ schritt }: { schritt: number }) {
   const zaunTex = useMemo(makeZaunTexture, [])
@@ -1313,8 +1408,9 @@ function Bauhof({ schritt }: { schritt: number }) {
       </mesh>
       {/* das eigentliche Level */}
       <Hofeinfahrt schritt={schritt} />
-      {/* Fundus rechts */}
+      {/* Fundus rechts + aufnehmbare Material-Kisten */}
       <Materiallager position={[13, 0, 15]} />
+      <LagerRegal />
       {/* Umzäunung: Tor vorne (Einfahrt), Zaun ringsum */}
       <Tor position={[0, 0, 8]} />
       <ZaunReihe tex={zaunTex} start={[-19, 8]}  count={5}  dir="x" />

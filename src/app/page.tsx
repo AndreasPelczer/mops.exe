@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { Press_Start_2P } from 'next/font/google'
-import GameScene, { type ChecklistState } from '@/game/GameScene'
+import GameScene, { type ChecklistState, LAGER_ITEMS } from '@/game/GameScene'
 import { cordulaGreet, cordulaRespond, type ChatLine } from '@/game/cordula'
 import { initAudio, playClick, playOpen, playEquip, playCorrect, playWrong, playFound, playComplete, setMuted } from '@/game/sound'
 
@@ -163,6 +163,8 @@ export default function Home() {
   const [safetyDone, setSafetyDone] = useState(false)
   const [muted, setMutedState] = useState(false)
   const [showTouch, setShowTouch] = useState(false)
+  const [inventory, setInventory] = useState<Record<string, number>>({})   // id → Anzahl
+  const [slot, setSlot] = useState(0)                                        // aktiver Hotbar-Slot (0..5)
 
   /* Touch-/kleine Bildschirme erkennen → Touch-Steuerung zeigen */
   useEffect(() => {
@@ -203,9 +205,22 @@ export default function Home() {
 
   const stabilityPercent = Object.values(checklist).filter(Boolean).length / 5 * 100
 
-  /* ── ESC handler ────────────────────────────── */
+  /* ── Inventar: Material aus dem Lager aufnehmen ── */
+  const handlePickup = useCallback((id: string) => {
+    const item = LAGER_ITEMS.find(i => i.id === id)
+    setInventory(prev => ({ ...prev, [id]: (prev[id] || 0) + 1 }))
+    const idx = LAGER_ITEMS.findIndex(i => i.id === id)
+    if (idx >= 0) setSlot(idx)
+    notify(`${item?.kurz ?? id} aufgenommen`)
+  }, [notify])
+
+  /* ── ESC handler + Hotbar-Wahl (1..6) ───────── */
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName
+      if (tag !== 'INPUT' && tag !== 'TEXTAREA' && /^Digit[1-6]$/.test(e.code)) {
+        setSlot(parseInt(e.code.slice(5), 10) - 1)
+      }
       if (e.code === 'Escape') {
         if (feedback) { setFeedback(null); return }
         if (decision) { setDecision(null); return }
@@ -526,8 +541,34 @@ export default function Home() {
           ppeOn={ppeOn}
           hazardsFound={hazardsFound}
           onSafetyInteract={handleSafetyInteract}
+          onPickup={handlePickup}
         />
       </Canvas>
+
+      {/* ── Hotbar / Inventar ──────────────────── */}
+      {started && (
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 flex gap-1.5 pointer-events-none">
+          {LAGER_ITEMS.map((it, i) => {
+            const count = inventory[it.id] || 0
+            const active = slot === i
+            return (
+              <div key={it.id} className={pixel.className}
+                style={{
+                  position: 'relative', width: 52, height: 52, borderRadius: 4,
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end',
+                  background: 'rgba(10,16,10,0.82)',
+                  border: active ? '2px solid #E8B04A' : '2px solid rgba(255,180,0,0.18)',
+                  boxShadow: active ? '0 0 8px rgba(232,176,74,0.6)' : 'none',
+                }}>
+                <span style={{ position: 'absolute', top: 3, left: 4, fontSize: 7, color: '#8aa07a' }}>{i + 1}</span>
+                <div style={{ width: 22, height: 22, marginTop: 8, borderRadius: 2, background: it.farbe, opacity: count > 0 ? 1 : 0.28 }} />
+                <span style={{ fontSize: 6, color: count > 0 ? '#F2E9D8' : 'rgba(242,233,216,0.3)', marginTop: 2 }}>{it.kurz}</span>
+                {count > 0 && <span style={{ position: 'absolute', bottom: 2, right: 4, fontSize: 8, color: '#E8B04A' }}>{count}</span>}
+              </div>
+            )
+          })}
+        </div>
+      )}
 
       {/* ── Ton an/aus ─────────────────────────── */}
       <button
